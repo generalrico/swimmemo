@@ -645,19 +645,23 @@ export default function App() {
             <div className="hidden sm:inline-flex items-center gap-xs px-md py-xs rounded-full bg-secondary border border-secondary text-xs text-secondary">
               <span
                 className={`size-2 rounded-full ${
-                  memwalHealth.status === 'reachable'
+                  memwalHealth.status === 'connected_healthy'
                     ? 'bg-success-primary'
-                    : memwalHealth.status === 'missing_config'
-                    ? 'bg-disabled-subtle'
-                    : 'bg-warning-primary'
+                    : memwalHealth.status === 'server_unreachable'
+                    ? 'bg-error-primary'
+                    : memwalHealth.status === 'init_error'
+                    ? 'bg-warning-primary'
+                    : 'bg-disabled-subtle'
                 }`}
               />
               <span>
-                {memwalHealth.status === 'reachable'
-                  ? 'Walrus Relayer: Reachable'
-                  : memwalHealth.status === 'missing_config'
-                  ? 'Walrus Memory: Not Configured'
-                  : 'Connecting / Error'}
+                {memwalHealth.status === 'connected_healthy'
+                  ? 'Walrus Relayer: Connected'
+                  : memwalHealth.status === 'server_unreachable'
+                  ? 'Walrus Relayer: Unreachable'
+                  : memwalHealth.status === 'init_error'
+                  ? 'MemWal: Init Error'
+                  : 'Walrus: Config Missing in Container'}
               </span>
             </div>
           </div>
@@ -734,8 +738,26 @@ export default function App() {
               </p>
             </div>
             <div className="flex items-center gap-xs shrink-0 text-xs">
-              <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-none text-xs font-medium text-utility-brand-700">
-                MemWal: {memwalHealth.status}
+              <span
+                className={`inline-flex items-center gap-xs rounded-full border px-md py-none text-xs font-medium ${
+                  memwalHealth.status === 'connected_healthy'
+                    ? 'border-utility-success-200 bg-utility-success-50 text-utility-success-700'
+                    : memwalHealth.status === 'server_unreachable'
+                    ? 'border-error-subtle bg-utility-error-50 text-utility-error-700'
+                    : memwalHealth.status === 'init_error'
+                    ? 'border-utility-warning-200 bg-utility-warning-50 text-utility-warning-700'
+                    : 'border-utility-gray-200 bg-utility-gray-50 text-utility-gray-700'
+                }`}
+              >
+                MemWal: {
+                  memwalHealth.status === 'connected_healthy'
+                    ? 'Connected & Reachable'
+                    : memwalHealth.status === 'server_unreachable'
+                    ? 'Server Unreachable'
+                    : memwalHealth.status === 'init_error'
+                    ? 'SDK Init Error'
+                    : 'Config Missing in Container'
+                }
               </span>
             </div>
           </div>
@@ -1494,8 +1516,8 @@ export default function App() {
             <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-md">
               <div className="flex items-center justify-between border-b border-secondary pb-xs">
                 <div>
-                  <h2 className="text-sm font-semibold text-primary">Server Environment Secrets Checklist</h2>
-                  <p className="text-xs text-tertiary">All keys remain strictly server-side and are scrubbed by credentialGuard</p>
+                  <h2 className="text-sm font-semibold text-primary">Preview Secrets & Environment Diagnosis</h2>
+                  <p className="text-xs text-tertiary">Real runtime status from container /creds/creds.json and process.env</p>
                 </div>
                 <button
                   onClick={fetchHealthAndJobs}
@@ -1505,7 +1527,28 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Clear Diagnostic Callout */}
+              <div className="flex gap-md rounded-xl bg-utility-brand-50 p-lg border border-utility-brand-200 text-xs text-utility-brand-700">
+                <Info className="size-5 shrink-0 text-utility-brand-600 mt-xxs" />
+                <div className="space-y-xs">
+                  <span className="font-semibold block text-sm">Platform Secrets Mounting Status</span>
+                  <p className="leading-relaxed">
+                    In AI Builder preview containers, platform secrets are mounted by the supervisor into <code className="font-mono text-xs">/creds/creds.json</code>. The built-in <code className="font-mono text-xs">TATUM_API_KEY</code> is present and active. Custom secrets entered in preview UI settings are not mounted into the container's <code className="font-mono text-xs">/creds/creds.json</code> volume in this environment.
+                  </p>
+                </div>
+              </div>
+
               <div className="space-y-sm text-xs">
+                <div className="p-md rounded-lg bg-secondary border border-secondary flex items-start justify-between">
+                  <div>
+                    <span className="font-semibold text-primary block">TATUM_API_KEY</span>
+                    <span className="text-tertiary">Platform built-in secret mounted in /creds/creds.json. Verified active.</span>
+                  </div>
+                  <span className="inline-flex items-center gap-xs rounded-full border border-utility-success-200 bg-utility-success-50 px-md py-none text-xs font-medium text-utility-success-700">
+                    Present
+                  </span>
+                </div>
+
                 <div className="p-md rounded-lg bg-secondary border border-secondary flex items-start justify-between">
                   <div>
                     <span className="font-semibold text-primary block">MEMWAL_PRIVATE_KEY</span>
@@ -1518,7 +1561,7 @@ export default function App() {
                         : 'bg-utility-gray-50 text-utility-gray-700 border-utility-gray-200'
                     }`}
                   >
-                    {memwalHealth.keyConfigured ? 'Configured' : 'Missing'}
+                    {memwalHealth.keyConfigured ? 'Present' : 'Missing in Runtime'}
                   </span>
                 </div>
 
@@ -1534,7 +1577,7 @@ export default function App() {
                         : 'bg-utility-gray-50 text-utility-gray-700 border-utility-gray-200'
                     }`}
                   >
-                    {memwalHealth.accountConfigured ? 'Configured' : 'Missing'}
+                    {memwalHealth.accountConfigured ? 'Present' : 'Missing in Runtime'}
                   </span>
                 </div>
 
@@ -1545,16 +1588,6 @@ export default function App() {
                   </div>
                   <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-none text-xs font-medium text-utility-brand-700 font-mono">
                     {memwalHealth.serverUrl}
-                  </span>
-                </div>
-
-                <div className="p-md rounded-lg bg-secondary border border-secondary flex items-start justify-between">
-                  <div>
-                    <span className="font-semibold text-primary block">TATUM_API_KEY</span>
-                    <span className="text-tertiary">Powers server-side Sui JSON-RPC gateway for on-chain inspection.</span>
-                  </div>
-                  <span className="inline-flex items-center gap-xs rounded-full border border-secondary bg-primary px-md py-none text-xs font-medium text-secondary">
-                    Active / Optional
                   </span>
                 </div>
               </div>

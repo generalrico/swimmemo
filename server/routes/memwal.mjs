@@ -31,7 +31,15 @@ function getMemWalClient() {
   const serverUrl = process.env.MEMWAL_SERVER_URL || 'https://relayer.memory.walrus.xyz'
 
   if (!key || !accountId) {
-    return { client: null, error: 'Missing MEMWAL_PRIVATE_KEY or MEMWAL_ACCOUNT_ID in server environment' }
+    return {
+      client: null,
+      error: 'Missing MEMWAL_PRIVATE_KEY or MEMWAL_ACCOUNT_ID in server environment',
+      details: {
+        keyPresent: Boolean(key),
+        accountPresent: Boolean(accountId),
+        serverUrl
+      }
+    }
   }
 
   try {
@@ -45,21 +53,30 @@ function getMemWalClient() {
     })
     return { client, serverUrl, accountId }
   } catch (err) {
-    return { client: null, error: err.message || 'Failed to initialize MemWal SDK client' }
+    return {
+      client: null,
+      error: err.message || 'Failed to initialize MemWal SDK client',
+      details: {
+        keyPresent: Boolean(key),
+        accountPresent: Boolean(accountId),
+        serverUrl
+      }
+    }
   }
 }
 
 // 1. Connection & Health check
-// Reachability is checked via health(), while configuration completeness is inspected separately.
+// Distinguishes: configuration_missing, init_error, server_unreachable, connected_healthy
 router.get('/health', async (_req, res) => {
   const keyConfigured = Boolean(process.env.MEMWAL_PRIVATE_KEY)
   const accountConfigured = Boolean(process.env.MEMWAL_ACCOUNT_ID)
   const serverUrl = process.env.MEMWAL_SERVER_URL || 'https://relayer.memory.walrus.xyz'
   const ownerAuthRequired = Boolean(process.env.OWNER_SECRET || process.env.MEMWAL_OWNER_KEY)
 
+  // Unconfigured state
   if (!keyConfigured || !accountConfigured) {
     return res.json({
-      status: 'missing_config',
+      status: 'configuration_missing',
       reachability: 'untested',
       authenticated: false,
       serverUrl,
@@ -67,7 +84,7 @@ router.get('/health', async (_req, res) => {
       accountConfigured,
       ownerAuthRequired,
       namespace: SWIMMEMO_NAMESPACE,
-      message: 'MEMWAL_PRIVATE_KEY or MEMWAL_ACCOUNT_ID is not configured in server environment.'
+      message: 'MEMWAL_ACCOUNT_ID or MEMWAL_PRIVATE_KEY is not injected into the preview container runtime.'
     })
   }
 
@@ -87,11 +104,11 @@ router.get('/health', async (_req, res) => {
   }
 
   try {
-    // MemWal health() tests relayer reachability only (unauthenticated preflight)
+    // MemWal health() tests relayer reachability (unauthenticated preflight)
     const healthResult = await client.health()
     res.json({
-      status: 'reachable',
-      reachability: 'ok',
+      status: 'connected_healthy',
+      reachability: 'reachable',
       authenticated: true,
       serverUrl,
       keyConfigured: true,
@@ -102,15 +119,15 @@ router.get('/health', async (_req, res) => {
     })
   } catch (err) {
     res.json({
-      status: 'reachability_failed',
-      reachability: 'error',
+      status: 'server_unreachable',
+      reachability: 'unreachable',
       authenticated: false,
       serverUrl,
       keyConfigured: true,
       accountConfigured: true,
       ownerAuthRequired,
       namespace: SWIMMEMO_NAMESPACE,
-      error: err.message || 'Failed to reach Walrus Memory server'
+      error: err.message || 'Failed to reach Walrus Memory relayer server'
     })
   }
 })
