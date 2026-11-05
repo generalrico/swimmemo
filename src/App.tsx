@@ -18,20 +18,15 @@ import {
   AlertCircle,
   HelpCircle,
   Clock,
-  Compass,
-  Award,
-  ChevronRight,
   ThumbsUp,
   ThumbsDown,
   Meh,
-  ExternalLink,
   UploadCloud,
   Check,
   X,
-  Database,
   Search,
-  Filter,
-  Activity
+  Lock,
+  Key
 } from 'lucide-react'
 
 // Profile Types
@@ -39,10 +34,10 @@ export interface SwimmerProfile {
   nickname: string
   abilityLevel: 'beginner' | 'intermediate' | 'advanced' | 'competitive'
   preferredStroke: 'freestyle' | 'backstroke' | 'breaststroke' | 'butterfly' | 'individual-medley'
-  poolLength: number // 25m, 50m, 25yd
-  targetDistance: number // in metres
-  currentBestTime: string // e.g., "1:02.4"
-  targetTime: string // e.g., "0:58.0"
+  poolLength: number
+  targetDistance: number
+  currentBestTime: string
+  targetTime: string
 }
 
 // Training Session Types
@@ -50,42 +45,40 @@ export interface TrainingSession {
   id: string
   date: string
   stroke: 'freestyle' | 'backstroke' | 'breaststroke' | 'butterfly' | 'individual-medley'
-  distance: number // metres
+  distance: number
   durationMinutes: number
-  effortRating: number // 1 to 10
+  effortRating: number
   techniqueNotes: string
   swimmerFeedback: string
   isDemo?: boolean
 }
 
-// Memory Record Types
-export interface MemoryEcho {
+// MemWal Recall & Job Types
+export interface MemWalRecalledItem {
+  blob_id: string
+  text: string
+  distance: number
+  created_at?: string
+}
+
+export interface TrackedJob {
+  jobId: string
+  status: 'pending' | 'running' | 'uploaded' | 'done' | 'failed' | 'not_found'
+  blobId?: string | null
+  text?: string
+  createdAt: string
+  updatedAt: string
+  error?: string | null
+  confirmed?: boolean
+}
+
+export interface LocalMemoryItem {
   id: string
   sourceSessionId: string
   category: 'fatigue' | 'technique' | 'pacing' | 'preference'
   insight: string
   influenceRule: string
   recordedAt: string
-  syncedToWalrus: boolean
-  walrusBlobId?: string
-  walrusJobId?: string
-  suiObjectId?: string
-  status: 'LOCAL_DEV_CACHE' | 'PENDING_WALRUS' | 'CONFIRMED_MAINNET'
-}
-
-// Next Suggestion Type
-export interface SuggestedTraining {
-  title: string
-  recommendedDistance: number
-  mainSet: string
-  targetEffort: string
-  drillFocus: string
-  explanation: {
-    ruleName: string
-    reason: string
-    referencedSessions: string[]
-    influencedByFeedback?: string
-  }
 }
 
 const DEFAULT_PROFILE: SwimmerProfile = {
@@ -156,7 +149,7 @@ export default function App() {
     return []
   })
 
-  // Feedback received on suggestions: 'too-hard' | 'too-easy' | 'helpful'
+  // Suggestion feedback history
   const [suggestionFeedbackHistory, setSuggestionFeedbackHistory] = useState<string[]>(() => {
     const saved = localStorage.getItem('swimmemo_suggestion_feedback')
     if (saved) {
@@ -165,25 +158,53 @@ export default function App() {
     return []
   })
 
-  // Walrus and Sui status from backend
-  const [nodeStatus, setNodeStatus] = useState<{
-    tatumApi: 'checking' | 'connected' | 'no-api-key' | 'egress-failed'
-    walrusUploads: any[]
-    latestSuiCheckpoint: string | null
-    lastError: string | null
-  }>({
-    tatumApi: 'checking',
-    walrusUploads: [],
-    latestSuiCheckpoint: null,
-    lastError: null
+  // Owner authentication token for protected routes
+  const [ownerToken, setOwnerToken] = useState<string>(() => {
+    return localStorage.getItem('swimmemo_owner_token') || ''
   })
 
-  // Syncing and verification state
-  const [isSyncingToWalrus, setIsSyncingToWalrus] = useState<boolean>(false)
-  const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null)
-  const [suiVerificationResult, setSuiVerificationResult] = useState<any | null>(null)
-  const [verifyingObjectId, setVerifyingObjectId] = useState<string>('')
-  const [isVerifyingSui, setIsVerifyingSui] = useState<boolean>(false)
+  // MemWal Health & Config Status
+  const [memwalHealth, setMemwalHealth] = useState<{
+    status: string
+    reachability: string
+    authenticated: boolean
+    serverUrl: string
+    keyConfigured: boolean
+    accountConfigured: boolean
+    ownerAuthRequired: boolean
+    namespace: string
+    error?: string
+  }>({
+    status: 'checking',
+    reachability: 'untested',
+    authenticated: false,
+    serverUrl: 'https://relayer.memory.walrus.xyz',
+    keyConfigured: false,
+    accountConfigured: false,
+    ownerAuthRequired: false,
+    namespace: 'swimmemo_v1'
+  })
+
+  // Tracked Jobs (from server activeJobs)
+  const [trackedJobs, setTrackedJobs] = useState<TrackedJob[]>([])
+
+  // Recalled memories from MemWal SDK
+  const [recalledMemories, setRecalledMemories] = useState<MemWalRecalledItem[]>([])
+  const [isRecalling, setIsRecalling] = useState<boolean>(false)
+  const [recallQuery, setRecallQuery] = useState<string>('swimming fatigue technique pacing')
+  const [recallError, setRecallError] = useState<string | null>(null)
+
+  // Explicit approval for remembering a specific memory
+  const [submittingMemoryId, setSubmittingMemoryId] = useState<string | null>(null)
+  const [submissionFeedback, setSubmissionFeedback] = useState<string | null>(null)
+
+  // Manual test form states
+  const [manualRememberText, setManualRememberText] = useState<string>('')
+  const [isManualSubmitting, setIsManualSubmitting] = useState<boolean>(false)
+
+  // Sui Account Inspection State
+  const [suiAccountData, setSuiAccountData] = useState<any | null>(null)
+  const [isInspectingSui, setIsInspectingSui] = useState<boolean>(false)
 
   // Training Log Form state
   const [isAddingSession, setIsAddingSession] = useState<boolean>(false)
@@ -206,7 +227,7 @@ export default function App() {
     return isDemoMode ? DEMO_SESSIONS : realSessions
   }, [isDemoMode, realSessions])
 
-  // Save changes to localStorage (Local dev cache)
+  // Save changes to localStorage
   useEffect(() => {
     localStorage.setItem('swimmemo_profile', JSON.stringify(profile))
   }, [profile])
@@ -219,66 +240,117 @@ export default function App() {
     localStorage.setItem('swimmemo_suggestion_feedback', JSON.stringify(suggestionFeedbackHistory))
   }, [suggestionFeedbackHistory])
 
-  // Check backend Tatum & Sui connectivity
-  const checkBackendState = async () => {
-    setNodeStatus(prev => ({ ...prev, tatumApi: 'checking' }))
+  useEffect(() => {
+    localStorage.setItem('swimmemo_owner_token', ownerToken)
+  }, [ownerToken])
+
+  // Poll MemWal health and tracked jobs
+  const fetchHealthAndJobs = async () => {
     try {
-      const statusRes = await fetch('/api/tatum/status')
-      const statusData = await statusRes.json()
+      const res = await fetch('/api/memwal/health')
+      const data = await res.json()
+      setMemwalHealth(data)
 
-      const suiRes = await fetch('/api/tatum/sui/state')
-      const suiData = await suiRes.json()
-
-      const uploadsRes = await fetch('/api/tatum/storage/uploads')
-      const uploadsData = await uploadsRes.json()
-
-      setNodeStatus({
-        tatumApi: statusData.status || 'no-api-key',
-        walrusUploads: uploadsData.uploads || [],
-        latestSuiCheckpoint: suiData.latestCheckpoint ? String(suiData.latestCheckpoint) : null,
-        lastError: statusData.error || suiData.error || null
-      })
-    } catch (e: any) {
-      setNodeStatus(prev => ({
+      const jobsRes = await fetch('/api/memwal/jobs')
+      const jobsData = await jobsRes.json()
+      if (jobsData.jobs) {
+        setTrackedJobs(jobsData.jobs)
+      }
+    } catch (err: any) {
+      setMemwalHealth(prev => ({
         ...prev,
-        tatumApi: 'egress-failed',
-        lastError: e.message
+        status: 'error',
+        reachability: 'error',
+        error: err.message
       }))
     }
   }
 
   useEffect(() => {
-    checkBackendState()
+    fetchHealthAndJobs()
   }, [])
 
-  // Generate Memory Echoes from current session history
-  const memories: MemoryEcho[] = useMemo(() => {
-    return activeSessions.map((session, idx) => {
-      let category: MemoryEcho['category'] = 'technique'
+  // Poll active incomplete jobs every 4 seconds
+  useEffect(() => {
+    const hasPending = trackedJobs.some(j => j.status === 'pending' || j.status === 'running' || j.status === 'uploaded')
+    if (!hasPending) return
+
+    const interval = setInterval(async () => {
+      for (const job of trackedJobs) {
+        if (job.status !== 'done' && job.status !== 'failed') {
+          try {
+            const res = await fetch(`/api/memwal/job/${job.jobId}`)
+            const data = await res.json()
+            if (data.job) {
+              setTrackedJobs(prev => prev.map(j => j.jobId === job.jobId ? data.job : j))
+            }
+          } catch (_) {}
+        }
+      }
+    }, 4000)
+
+    return () => clearInterval(interval)
+  }, [trackedJobs])
+
+  // Recall memories from MemWal SDK
+  const handleRecallMemories = async (queryToUse?: string) => {
+    const q = (queryToUse || recallQuery).trim()
+    if (!q) return
+    setIsRecalling(true)
+    setRecallError(null)
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (ownerToken) headers['x-owner-token'] = ownerToken
+
+      const res = await fetch('/api/memwal/recall', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ query: q, limit: 10 })
+      })
+
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setRecalledMemories(data.results || [])
+      } else {
+        setRecallError(data.error || 'Recall failed')
+      }
+    } catch (err: any) {
+      setRecallError(err.message || 'Network error recalling memories')
+    } finally {
+      setIsRecalling(false)
+    }
+  }
+
+  // Count confirmed Walrus Memory mainnet items
+  const confirmedMemoriesCount = useMemo(() => {
+    return trackedJobs.filter(j => j.status === 'done' && Boolean(j.blobId)).length
+  }, [trackedJobs])
+
+  // Extract Local Memory Candidates from Sessions
+  const localMemories: LocalMemoryItem[] = useMemo(() => {
+    return activeSessions.map(session => {
+      let category: LocalMemoryItem['category'] = 'technique'
       let insight = ''
       let influenceRule = ''
 
       if (session.effortRating >= 8) {
         category = 'fatigue'
-        insight = `High fatigue reported (RPE ${session.effortRating}/10). Notes: "${session.techniqueNotes || 'Heavy exertion'}"`
-        influenceRule = 'Triggers aerobic recovery intervals or lower stroke rate on the next session.'
+        insight = `High exertion reported (RPE ${session.effortRating}/10): ${session.techniqueNotes || 'High intensity'}`
+        influenceRule = 'Triggers aerobic recovery intervals and lower stroke rate.'
       } else if (session.techniqueNotes.toLowerCase().includes('elbow') || session.techniqueNotes.toLowerCase().includes('catch')) {
         category = 'technique'
         insight = `Catch mechanics flagged: ${session.techniqueNotes}`
-        influenceRule = 'Prescribes fingertip drag and fist drills before main sets.'
+        influenceRule = 'Prescribes fingertip drag and fist drills prior to main set.'
       } else if (session.effortRating <= 5) {
         category = 'pacing'
-        insight = `Aerobic baseline comfort observed: ${session.distance}m at RPE ${session.effortRating}/10.`
+        insight = `Aerobic baseline comfort: ${session.distance}m at RPE ${session.effortRating}/10.`
         influenceRule = 'Allows progressive distance overload (+10%) in subsequent sessions.'
       } else {
         category = 'preference'
-        insight = `Maintained steady pace across ${session.distance}m ${session.stroke}.`
-        influenceRule = 'Calculates split consistency based on target distance.'
+        insight = `Maintained rhythm across ${session.distance}m ${session.stroke}.`
+        influenceRule = 'Maintains balanced split consistency.'
       }
-
-      // Check if this memory is confirmed in Walrus uploads
-      const matchUpload = nodeStatus.walrusUploads.find(u => u.filename && u.filename.includes(session.id))
-      const isConfirmed = matchUpload && matchUpload.status === 'CERTIFIED'
 
       return {
         id: `mem-${session.id}`,
@@ -286,25 +358,57 @@ export default function App() {
         category,
         insight,
         influenceRule,
-        recordedAt: session.date,
-        syncedToWalrus: !!matchUpload,
-        walrusBlobId: matchUpload?.blobId,
-        walrusJobId: matchUpload?.jobId,
-        suiObjectId: matchUpload?.suiObjectId,
-        status: isConfirmed ? 'CONFIRMED_MAINNET' : matchUpload ? 'PENDING_WALRUS' : 'LOCAL_DEV_CACHE'
+        recordedAt: session.date
       }
     })
-  }, [activeSessions, nodeStatus.walrusUploads])
+  }, [activeSessions])
 
-  // Count confirmed Walrus mainnet memories
-  const confirmedWalrusCount = useMemo(() => {
-    return memories.filter(m => m.status === 'CONFIRMED_MAINNET').length
-  }, [memories])
-
-  // Explainable Rule-Based Next Training Suggestion
-  const suggestion: SuggestedTraining = useMemo(() => {
+  // Explainable Rule-Based Suggestion factoring in both session history & recalled MemWal memories
+  const suggestion = useMemo(() => {
     const recent = activeSessions[activeSessions.length - 1]
     const lastFeedback = suggestionFeedbackHistory[suggestionFeedbackHistory.length - 1]
+
+    let distanceAdjustment = 0
+    let intensityModifier = ''
+    if (lastFeedback === 'too-hard') {
+      distanceAdjustment = -200
+      intensityModifier = 'Reduced volume by 200m based on feedback ("Too Hard").'
+    } else if (lastFeedback === 'too-easy') {
+      distanceAdjustment = 200
+      intensityModifier = 'Scaled up main set volume by 200m based on feedback ("Too Easy").'
+    }
+
+    // Check if any recalled memories specifically mention fatigue or shoulder strain
+    const recalledFatigue = recalledMemories.find(m =>
+      m.text.toLowerCase().includes('fatigue') ||
+      m.text.toLowerCase().includes('burned') ||
+      m.text.toLowerCase().includes('shoulder')
+    )
+
+    const recalledTechnique = recalledMemories.find(m =>
+      m.text.toLowerCase().includes('elbow') ||
+      m.text.toLowerCase().includes('catch') ||
+      m.text.toLowerCase().includes('breath')
+    )
+
+    if (recalledFatigue) {
+      const recDist = Math.max(600, (recent?.distance || 1000) - 200 + distanceAdjustment)
+      return {
+        title: 'Walrus Memory-Informed Active Recovery & Stroke Reset',
+        recommendedDistance: recDist,
+        mainSet: '6 x 75m (25m drill, 50m smooth swim) with 30s rest. Focus on relaxed recovery.',
+        targetEffort: 'RPE 4–5 / 10 (Strict aerobic recovery)',
+        drillFocus: 'Fingertip drag drill & relaxed high-elbow recovery',
+        explanation: {
+          ruleName: 'Recalled Fatigue Protection Rule',
+          reason: `A confirmed Walrus memory was recalled stating: "${recalledFatigue.text}". Session is tuned to prevent cumulative shoulder strain.`,
+          referencedSessions: recent ? [recent.id] : [],
+          recalledBlobId: recalledFatigue.blob_id,
+          recalledSnippet: recalledFatigue.text,
+          influencedByFeedback: intensityModifier || undefined
+        }
+      }
+    }
 
     if (!recent) {
       return {
@@ -321,17 +425,6 @@ export default function App() {
       }
     }
 
-    // Feedback influenced adjustments
-    let distanceAdjustment = 0
-    let intensityModifier = ''
-    if (lastFeedback === 'too-hard') {
-      distanceAdjustment = -200
-      intensityModifier = 'Reduced volume by 200m due to recent swimmer feedback ("Too Hard").'
-    } else if (lastFeedback === 'too-easy') {
-      distanceAdjustment = 200
-      intensityModifier = 'Scaled up main set volume by 200m based on swimmer feedback ("Too Easy").'
-    }
-
     if (recent.effortRating >= 8) {
       const recDist = Math.max(600, recent.distance - 300 + distanceAdjustment)
       return {
@@ -342,54 +435,85 @@ export default function App() {
         drillFocus: 'Fingertip drag drill & high-elbow catch positioning',
         explanation: {
           ruleName: 'Exertion Recovery Protocol (RPE ≥ 8)',
-          reason: `Previous session on ${recent.date} reached RPE ${recent.effortRating}/10 (${recent.techniqueNotes || 'High exertion'}). Pacing is dialled down to prevent shoulder strain and restore stroke mechanics.`,
+          reason: `Previous session on ${recent.date} reached RPE ${recent.effortRating}/10 (${recent.techniqueNotes || 'High exertion'}). Pacing is dialled down to restore stroke mechanics.`,
           referencedSessions: [recent.id],
+          recalledBlobId: recalledTechnique?.blob_id,
+          recalledSnippet: recalledTechnique?.text,
           influencedByFeedback: intensityModifier || undefined
         }
       }
     }
 
-    if (recent.techniqueNotes.toLowerCase().includes('breath') || recent.techniqueNotes.toLowerCase().includes('sprint')) {
-      const recDist = recent.distance + distanceAdjustment
-      return {
-        title: 'Hypoxic Pacing & Stroke Rhythm Set',
-        recommendedDistance: recDist,
-        mainSet: '8 x 50m descend 1–4, 5–8 (hold stroke count constant at 16 strokes/lap) with 20s rest.',
-        targetEffort: 'RPE 6–7 / 10',
-        drillFocus: 'Bilateral breathing (3-stroke cadence) and dolphin kick off every wall',
-        explanation: {
-          ruleName: 'Breathing Cadence Stabilization Rule',
-          reason: `Addressing technique log from ${recent.date} noting breathlessness or breathing instability. Suggesting descent sets with strict stroke counts.`,
-          referencedSessions: [recent.id],
-          influencedByFeedback: intensityModifier || undefined
-        }
-      }
-    }
-
-    // Progressive overload toward target
     const targetDist = profile.targetDistance || 1500
     const recDist = Math.min(targetDist, recent.distance + 200 + distanceAdjustment)
     return {
       title: 'Progressive Endurance & Goal Pace Build',
       recommendedDistance: recDist,
-      mainSet: `5 x 200m negative split (second 100m faster than first) with 30s rest; 4 x 50m choice stroke easy.`,
+      mainSet: '5 x 200m negative split (second 100m faster than first) with 30s rest; 4 x 50m choice stroke easy.',
       targetEffort: 'RPE 7 / 10',
       drillFocus: 'DPS (Distance Per Stroke) & rotational core engagement',
       explanation: {
         ruleName: 'Progressive Overload Toward Target Goal',
         reason: `Previous session on ${recent.date} was completed smoothly at RPE ${recent.effortRating}/10. Increasing distance toward your goal of ${profile.targetDistance}m.`,
         referencedSessions: [recent.id],
+        recalledBlobId: recalledTechnique?.blob_id,
+        recalledSnippet: recalledTechnique?.text,
         influencedByFeedback: intensityModifier || undefined
       }
     }
-  }, [activeSessions, profile.targetDistance, suggestionFeedbackHistory])
+  }, [activeSessions, profile.targetDistance, suggestionFeedbackHistory, recalledMemories])
 
-  // Handle Suggestion Feedback
-  const handleFeedback = (feedbackType: 'helpful' | 'too-easy' | 'too-hard') => {
-    setSuggestionFeedbackHistory(prev => [...prev, feedbackType])
+  // Explicit approval before each memory upload
+  const handleApproveAndRemember = async (text: string, id: string) => {
+    setSubmittingMemoryId(id)
+    setSubmissionFeedback(null)
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (ownerToken) headers['x-owner-token'] = ownerToken
+
+      const idempotencyKey = `swimmemo_${profile.nickname}_${id}`
+
+      const res = await fetch('/api/memwal/remember', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          text: `[Swimmer: ${profile.nickname}] [Stroke: ${profile.preferredStroke}] ${text}`,
+          approved: true,
+          idempotencyKey
+        })
+      })
+
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setSubmissionFeedback(`Job accepted! Job ID: ${data.jobId}. Polling status...`)
+        await fetchHealthAndJobs()
+      } else {
+        setSubmissionFeedback(`Remember request failed: ${data.error || 'Server error'}`)
+      }
+    } catch (err: any) {
+      setSubmissionFeedback(`Failed to submit memory: ${err.message}`)
+    } finally {
+      setSubmittingMemoryId(null)
+    }
   }
 
-  // Handle adding or editing a training session
+  // Sui Account Inspection via Tatum Sui Gateway
+  const handleInspectSuiAccount = async () => {
+    setIsInspectingSui(true)
+    setSuiAccountData(null)
+    try {
+      const res = await fetch('/api/memwal/sui/inspect-account')
+      const data = await res.json()
+      setSuiAccountData(data)
+    } catch (err: any) {
+      setSuiAccountData({ status: 'error', message: err.message })
+    } finally {
+      setIsInspectingSui(false)
+    }
+  }
+
+  // Handle Form submission for Training Log
   const handleSubmitSession = (e: React.FormEvent) => {
     e.preventDefault()
     const errors: string[] = []
@@ -467,71 +591,11 @@ export default function App() {
     setIsAddingSession(true)
   }
 
-  // Handle Profile Update
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault()
     setProfile(profileForm)
     setProfileSavedMsg('Profile updated successfully.')
     setTimeout(() => setProfileSavedMsg(null), 3000)
-  }
-
-  // Sync Memory Snapshot to Walrus Mainnet via Tatum API
-  const handleSyncToWalrus = async (memory: MemoryEcho) => {
-    setIsSyncingToWalrus(true)
-    setSyncStatusMsg(`Staging memory ${memory.id} to Walrus Decentralized Storage...`)
-
-    const payload = {
-      app: 'SwimMemo',
-      track: 'Track 02: Smart Agents for Real Life (Total Recall)',
-      version: '1.0.0',
-      memoryEcho: memory,
-      swimmerProfileNickname: profile.nickname,
-      targetGoal: `${profile.targetDistance}m @ ${profile.targetTime}`,
-      timestamp: new Date().toISOString()
-    }
-
-    try {
-      const res = await fetch('/api/tatum/storage/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: `swimmemo-${memory.sourceSessionId}.json`,
-          memoryPayload: payload
-        })
-      })
-
-      const result = await res.json()
-      if (res.ok && result.success) {
-        setSyncStatusMsg(`Uploaded to Walrus worker! Pre-computed Blob ID: ${result.data?.blobId || 'staged'}. Job ID: ${result.data?.jobId}`)
-        await checkBackendState()
-      } else {
-        setSyncStatusMsg(`Walrus sync failed: ${result.message || 'API error'}`)
-      }
-    } catch (err: any) {
-      setSyncStatusMsg(`Network error during Walrus upload: ${err.message}`)
-    } finally {
-      setIsSyncingToWalrus(false)
-    }
-  }
-
-  // Verify Sui Onchain Object via Tatum Sui Gateway
-  const handleVerifySuiObject = async (objectId: string) => {
-    if (!objectId) return
-    setIsVerifyingSui(true)
-    setSuiVerificationResult(null)
-    try {
-      const res = await fetch('/api/tatum/sui/verify-object', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ objectId: objectId.trim(), network: 'mainnet' })
-      })
-      const data = await res.json()
-      setSuiVerificationResult(data)
-    } catch (err: any) {
-      setSuiVerificationResult({ status: 'error', message: err.message })
-    } finally {
-      setIsVerifyingSui(false)
-    }
   }
 
   const totalLoggedDistance = useMemo(() => {
@@ -556,10 +620,10 @@ export default function App() {
               <div className="flex items-center gap-xs">
                 <span className="text-heading-xs font-semibold text-primary tracking-tight">SwimMemo</span>
                 <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-none text-xs font-medium text-utility-brand-700">
-                  Total Recall · Track 02
+                  Walrus Memory SDK
                 </span>
               </div>
-              <p className="text-xs text-tertiary">Smart Training Agent for Real Life</p>
+              <p className="text-xs text-tertiary">Explainable Swimming Companion · Total Recall</p>
             </div>
           </div>
 
@@ -581,21 +645,19 @@ export default function App() {
             <div className="hidden sm:inline-flex items-center gap-xs px-md py-xs rounded-full bg-secondary border border-secondary text-xs text-secondary">
               <span
                 className={`size-2 rounded-full ${
-                  nodeStatus.tatumApi === 'connected'
+                  memwalHealth.status === 'reachable'
                     ? 'bg-success-primary'
-                    : nodeStatus.tatumApi === 'checking'
-                    ? 'bg-warning-primary'
-                    : 'bg-disabled-subtle'
+                    : memwalHealth.status === 'missing_config'
+                    ? 'bg-disabled-subtle'
+                    : 'bg-warning-primary'
                 }`}
               />
               <span>
-                {nodeStatus.tatumApi === 'connected'
-                  ? 'Tatum Sui & Walrus: Connected'
-                  : nodeStatus.tatumApi === 'checking'
-                  ? 'Connecting...'
-                  : nodeStatus.tatumApi === 'no-api-key'
-                  ? 'Local Dev Fallback (No Key)'
-                  : 'Connection Error'}
+                {memwalHealth.status === 'reachable'
+                  ? 'Walrus Relayer: Reachable'
+                  : memwalHealth.status === 'missing_config'
+                  ? 'Walrus Memory: Not Configured'
+                  : 'Connecting / Error'}
               </span>
             </div>
           </div>
@@ -634,7 +696,7 @@ export default function App() {
             }`}
           >
             <Brain className="size-4 shrink-0 text-fg-quaternary" />
-            Memory Vault ({confirmedWalrusCount} Walrus Mainnet)
+            Walrus Memory Vault ({confirmedMemoriesCount} Confirmed)
           </button>
           <button
             onClick={() => setActiveTab('settings')}
@@ -645,12 +707,12 @@ export default function App() {
             }`}
           >
             <Settings className="size-4 shrink-0 text-fg-quaternary" />
-            Profile & Integrations
+            Profile & Secrets Setup
           </button>
         </div>
       </header>
 
-      {/* Main Content */}
+      {/* Main Container */}
       <main className="flex-1 max-w-6xl w-full mx-auto p-md md:p-xl space-y-xl">
         {/* Notice Banner */}
         <div className="flex gap-lg rounded-xl bg-utility-brand-50 p-xl border border-utility-brand-200">
@@ -663,21 +725,17 @@ export default function App() {
                 </span>
                 {isDemoMode && (
                   <span className="inline-flex items-center gap-xs rounded-full border border-utility-warning-200 bg-utility-warning-50 px-md py-none text-xs font-medium text-utility-warning-700">
-                    Sample Data
+                    Demo Data
                   </span>
                 )}
               </div>
               <p className="text-sm text-tertiary mt-xxs">
-                Target: {profile.targetDistance}m ({profile.preferredStroke}) · Best: {profile.currentBestTime} · Goal: {profile.targetTime}.
-                Memories are private and never uploaded automatically.
+                Walrus Namespace: <strong className="font-mono text-xs">{memwalHealth.namespace}</strong> · Confirmed Mainnet Memories: {confirmedMemoriesCount} · Local Cache: {localMemories.length}
               </p>
             </div>
             <div className="flex items-center gap-xs shrink-0 text-xs">
               <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-none text-xs font-medium text-utility-brand-700">
-                Walrus: {confirmedWalrusCount}
-              </span>
-              <span className="inline-flex items-center gap-xs rounded-full border border-secondary bg-primary px-md py-none text-xs font-medium text-secondary">
-                Cache: {memories.length}
+                MemWal: {memwalHealth.status}
               </span>
             </div>
           </div>
@@ -717,12 +775,12 @@ export default function App() {
               </section>
 
               <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs">
-                <p className="text-sm text-tertiary">Memory Echoes</p>
+                <p className="text-sm text-tertiary">Confirmed Walrus Blobs</p>
                 <p className="mt-md text-heading-xs font-semibold text-brand-primary">
-                  {memories.length}
+                  {confirmedMemoriesCount}
                 </p>
                 <span className="text-xs text-tertiary mt-xs block">
-                  Cross-visit training clues
+                  Verified mainnet blobs
                 </span>
               </section>
 
@@ -745,7 +803,7 @@ export default function App() {
                   <h2 className="text-heading-xs font-semibold text-primary">Explainable Next Training Suggestion</h2>
                 </div>
                 <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-none text-xs font-medium text-utility-brand-700">
-                  Transparent Rule-Based Reasoner
+                  Walrus Memory Augmented Reasoner
                 </span>
               </div>
 
@@ -768,7 +826,7 @@ export default function App() {
                   </p>
                 </div>
 
-                {/* The "Why this suggestion?" transparent explanation box */}
+                {/* The "Why this suggestion?" explanation box */}
                 <div className="flex gap-md rounded-xl bg-utility-brand-50 p-lg border border-utility-brand-200">
                   <Brain className="size-5 shrink-0 text-utility-brand-600 mt-xxs" />
                   <div className="space-y-xs">
@@ -778,7 +836,15 @@ export default function App() {
                     <p className="text-sm text-secondary leading-relaxed">
                       {suggestion.explanation.reason}
                     </p>
-                    {suggestion.explanation.referencedSessions.length > 0 && (
+                    {suggestion.explanation.recalledBlobId && (
+                      <div className="pt-xs flex items-center gap-xs text-xs text-utility-brand-700">
+                        <span className="font-semibold">Influenced by Recalled Walrus Blob:</span>
+                        <span className="font-mono text-xs px-sm py-none rounded-full bg-primary border border-utility-brand-200">
+                          {suggestion.explanation.recalledBlobId}
+                        </span>
+                      </div>
+                    )}
+                    {suggestion.explanation.referencedSessions && suggestion.explanation.referencedSessions.length > 0 && (
                       <div className="pt-xs flex items-center gap-xs text-xs text-tertiary">
                         <span>Source session referenced:</span>
                         {suggestion.explanation.referencedSessions.map(id => (
@@ -802,19 +868,19 @@ export default function App() {
                 <span>How did this suggestion fit your current recovery state?</span>
                 <div className="flex items-center gap-xs">
                   <button
-                    onClick={() => handleFeedback('helpful')}
+                    onClick={() => setSuggestionFeedbackHistory(prev => [...prev, 'helpful'])}
                     className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                   >
                     <ThumbsUp className="size-4 shrink-0 text-fg-quaternary" /> Helpful
                   </button>
                   <button
-                    onClick={() => handleFeedback('too-easy')}
+                    onClick={() => setSuggestionFeedbackHistory(prev => [...prev, 'too-easy'])}
                     className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                   >
                     <Meh className="size-4 shrink-0 text-fg-quaternary" /> Too Easy
                   </button>
                   <button
-                    onClick={() => handleFeedback('too-hard')}
+                    onClick={() => setSuggestionFeedbackHistory(prev => [...prev, 'too-hard'])}
                     className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                   >
                     <ThumbsDown className="size-4 shrink-0 text-fg-quaternary" /> Too Hard
@@ -823,57 +889,41 @@ export default function App() {
               </div>
             </section>
 
-            {/* Recent Sessions Overview */}
-            <div className="p-xl rounded-xl bg-primary border border-secondary shadow-xs space-y-md">
+            {/* Recalled Memories Quick Inspection */}
+            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-md">
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-heading-xs font-semibold text-primary">Recent Sessions</h2>
-                  <p className="text-xs text-tertiary">Workouts recorded in your current view</p>
+                  <h2 className="text-heading-xs font-semibold text-primary">Recalled Walrus Memories</h2>
+                  <p className="text-xs text-tertiary">Active memories retrieved via official MemWal SDK</p>
                 </div>
                 <button
-                  onClick={() => setActiveTab('log')}
-                  className="text-xs text-brand-primary hover:underline flex items-center gap-xs font-medium"
+                  onClick={() => handleRecallMemories()}
+                  disabled={isRecalling}
+                  className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
                 >
-                  View full training log <ArrowRight className="w-3.5 h-3.5 text-fg-brand-primary" />
+                  <RefreshCw className={`size-4 shrink-0 text-fg-quaternary ${isRecalling ? 'animate-spin' : ''}`} />
+                  {isRecalling ? 'Recalling...' : 'Refresh Recall'}
                 </button>
               </div>
 
-              {activeSessions.length === 0 ? (
+              {recalledMemories.length === 0 ? (
                 <div className="text-center py-xl text-tertiary text-sm">
-                  No sessions recorded yet. Switch to demo mode or record your first workout in the Training Log.
+                  No memories currently recalled from Walrus relayer. Use the Walrus Memory Vault tab to review and approve memory sync.
                 </div>
               ) : (
                 <div className="space-y-sm">
-                  {activeSessions.slice(0, 3).map(session => (
-                    <div
-                      key={session.id}
-                      className="p-md rounded-lg bg-secondary border border-secondary flex flex-col md:flex-row md:items-center justify-between gap-sm"
-                    >
-                      <div className="space-y-xxs">
-                        <div className="flex items-center gap-xs">
-                          <span className="text-sm font-bold text-primary capitalize">{session.stroke}</span>
-                          <span className="text-xs text-tertiary">· {session.date}</span>
-                          <span className="text-xs px-xs rounded bg-utility-brand-50 border border-utility-brand-200 text-utility-brand-700 font-medium">
-                            {session.distance}m
-                          </span>
-                        </div>
-                        <p className="text-xs text-secondary line-clamp-1">
-                          Technique: {session.techniqueNotes || 'No notes'}
-                        </p>
+                  {recalledMemories.map((m, idx) => (
+                    <div key={idx} className="p-md rounded-lg bg-secondary border border-secondary text-xs space-y-xxs">
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-xs text-tertiary">Blob ID: {m.blob_id}</span>
+                        <span className="text-tertiary">Distance: {m.distance?.toFixed(4)}</span>
                       </div>
-                      <div className="flex items-center gap-md shrink-0">
-                        <span className="text-xs text-tertiary">
-                          Effort: <strong className="text-primary">{session.effortRating}/10</strong>
-                        </span>
-                        <span className="text-xs text-tertiary">
-                          Duration: <strong className="text-primary">{session.durationMinutes} min</strong>
-                        </span>
-                      </div>
+                      <p className="text-primary font-medium">{m.text}</p>
                     </div>
                   ))}
                 </div>
               )}
-            </div>
+            </section>
           </div>
         )}
 
@@ -883,8 +933,8 @@ export default function App() {
             {/* Header + Add button */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-sm">
               <div>
-                <h1 className="text-heading-sm font-bold text-primary">Training Log</h1>
-                <p className="text-xs text-tertiary">Record workouts with effort, technique feedback, and duration</p>
+                <h1 className="text-heading-sm font-semibold text-primary">Training Log</h1>
+                <p className="text-sm text-tertiary">Record workouts with effort, technique feedback, and duration</p>
               </div>
               <button
                 onClick={() => {
@@ -902,44 +952,47 @@ export default function App() {
                   setFormFeedback('')
                   setIsAddingSession(!isAddingSession)
                 }}
-                className="px-md py-sm rounded-md bg-brand-solid text-primary-on-brand font-medium text-sm flex items-center justify-center gap-xs hover:bg-brand-solid-hover transition-colors"
+                className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
               >
-                {isAddingSession ? <X className="w-4 h-4 text-fg-white" /> : <Plus className="w-4 h-4 text-fg-white" />}
+                {isAddingSession ? <X className="size-4 shrink-0 text-fg-white" /> : <Plus className="size-4 shrink-0 text-fg-white" />}
                 {isAddingSession ? 'Cancel' : 'Log New Session'}
               </button>
             </div>
 
             {/* Session Form (Add / Edit) */}
             {isAddingSession && (
-              <form onSubmit={handleSubmitSession} className="p-xl rounded-xl bg-primary border border-secondary shadow-xs space-y-md">
-                <h2 className="text-sm font-bold text-primary border-b border-secondary pb-xs">
+              <form onSubmit={handleSubmitSession} className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-md">
+                <h2 className="text-sm font-semibold text-primary border-b border-secondary pb-xs">
                   {editingSessionId ? 'Edit Training Session' : 'Record Training Session'}
                 </h2>
 
                 {formErrors.length > 0 && (
-                  <div className="p-sm rounded bg-utility-error-50 border border-error-subtle text-utility-error-700 text-xs space-y-xxs">
-                    {formErrors.map((err, i) => (
-                      <p key={i}>• {err}</p>
-                    ))}
+                  <div className="flex gap-md rounded-xl bg-utility-error-50 p-md border border-error-subtle">
+                    <AlertCircle className="size-5 shrink-0 text-utility-error-600 mt-xxs" />
+                    <div className="text-xs text-utility-error-700 space-y-xxs">
+                      {formErrors.map((err, i) => (
+                        <p key={i}>• {err}</p>
+                      ))}
+                    </div>
                   </div>
                 )}
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-md">
-                  <div>
-                    <label className="block text-xs font-medium text-secondary mb-xs">Date</label>
+                  <div className="flex flex-col gap-sm">
+                    <label className="text-sm font-medium text-secondary">Date</label>
                     <input
                       type="date"
                       value={formDate}
                       onChange={e => setFormDate(e.target.value)}
-                      className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                      className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                     />
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-secondary mb-xs">Stroke</label>
+                  <div className="flex flex-col gap-sm">
+                    <label className="text-sm font-medium text-secondary">Stroke</label>
                     <select
                       value={formStroke}
                       onChange={e => setFormStroke(e.target.value as any)}
-                      className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                      className="rounded-md bg-primary px-lg py-sm text-sm text-primary border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                     >
                       <option value="freestyle">Freestyle</option>
                       <option value="backstroke">Backstroke</option>
@@ -948,8 +1001,8 @@ export default function App() {
                       <option value="individual-medley">Individual Medley</option>
                     </select>
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-secondary mb-xs">Distance (metres)</label>
+                  <div className="flex flex-col gap-sm">
+                    <label className="text-sm font-medium text-secondary">Distance (metres)</label>
                     <input
                       type="number"
                       min="25"
@@ -957,22 +1010,22 @@ export default function App() {
                       step="25"
                       value={formDistance}
                       onChange={e => setFormDistance(Number(e.target.value))}
-                      className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                      className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                     />
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-secondary mb-xs">Duration (minutes)</label>
+                  <div className="flex flex-col gap-sm">
+                    <label className="text-sm font-medium text-secondary">Duration (minutes)</label>
                     <input
                       type="number"
                       min="1"
                       max="600"
                       value={formDuration}
                       onChange={e => setFormDuration(Number(e.target.value))}
-                      className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                      className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                     />
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-secondary mb-xs">
+                  <div className="flex flex-col gap-sm">
+                    <label className="text-sm font-medium text-secondary">
                       Effort Rating: {formEffort} / 10 (RPE)
                     </label>
                     <input
@@ -981,7 +1034,7 @@ export default function App() {
                       max="10"
                       value={formEffort}
                       onChange={e => setFormEffort(Number(e.target.value))}
-                      className="w-full mt-xs"
+                      className="w-full mt-sm"
                     />
                     <div className="flex justify-between text-xs text-tertiary">
                       <span>1 (Very Easy)</span>
@@ -991,25 +1044,26 @@ export default function App() {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-secondary mb-xs">Technique Notes</label>
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Technique Notes</label>
                   <input
                     type="text"
                     placeholder="e.g., Kept elbow high on recovery, bilateral breathing every 3 strokes"
                     value={formNotes}
                     onChange={e => setFormNotes(e.target.value)}
-                    className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                   />
+                  <p className="text-xs text-tertiary">Specific cues SwimMemo extracts as future training rules.</p>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-secondary mb-xs">Swimmer Feedback & Physical Sensation</label>
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Swimmer Feedback & Physical Sensation</label>
                   <textarea
                     rows={2}
                     placeholder="e.g., Legs felt heavy during final 200m; shoulders felt fluid and pain-free"
                     value={formFeedback}
                     onChange={e => setFormFeedback(e.target.value)}
-                    className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                   />
                 </div>
 
@@ -1017,13 +1071,13 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setIsAddingSession(false)}
-                    className="px-md py-xs rounded border border-secondary bg-primary text-secondary text-sm hover:text-primary"
+                    className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-sm font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-md py-xs rounded bg-brand-solid text-primary-on-brand font-medium text-sm hover:bg-brand-solid-hover"
+                    className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                   >
                     {editingSessionId ? 'Save Changes' : 'Record Workout'}
                   </button>
@@ -1034,7 +1088,7 @@ export default function App() {
             {/* List of Sessions */}
             <div className="space-y-sm">
               {activeSessions.length === 0 ? (
-                <div className="p-xl rounded-xl bg-primary border border-secondary text-center space-y-sm">
+                <div className="rounded-xl border border-secondary bg-primary p-xl text-center space-y-sm">
                   <p className="text-secondary text-sm">No training sessions recorded in this mode.</p>
                   <p className="text-xs text-tertiary">Click "Log New Session" above or switch to Demo Data to inspect sample history.</p>
                 </div>
@@ -1042,16 +1096,16 @@ export default function App() {
                 activeSessions.map(session => (
                   <div
                     key={session.id}
-                    className="p-md md:p-lg rounded-xl bg-primary border border-secondary shadow-xs space-y-sm transition-all"
+                    className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-sm"
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-xs border-b border-secondary pb-xs">
                       <div className="flex items-center gap-xs">
                         <span className="font-bold text-md text-primary capitalize">{session.stroke}</span>
-                        <span className="text-xs px-xs rounded bg-utility-brand-50 border border-utility-brand-200 text-utility-brand-700 font-medium">
+                        <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-none text-xs font-medium text-utility-brand-700">
                           {session.distance}m
                         </span>
                         {session.isDemo && (
-                          <span className="text-xs px-xs rounded bg-utility-warning-50 border border-utility-warning-200 text-utility-warning-700 font-medium">
+                          <span className="inline-flex items-center gap-xs rounded-full border border-utility-warning-200 bg-utility-warning-50 px-md py-none text-xs font-medium text-utility-warning-700">
                             Demo
                           </span>
                         )}
@@ -1064,11 +1118,11 @@ export default function App() {
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-md text-xs">
-                      <div className="p-sm rounded bg-secondary border border-secondary">
+                      <div className="p-md rounded-lg bg-secondary border border-secondary">
                         <span className="font-semibold text-tertiary block mb-xxs">Technique Notes:</span>
                         <p className="text-primary">{session.techniqueNotes || 'No notes specified.'}</p>
                       </div>
-                      <div className="p-sm rounded bg-secondary border border-secondary">
+                      <div className="p-md rounded-lg bg-secondary border border-secondary">
                         <span className="font-semibold text-tertiary block mb-xxs">Swimmer Feedback:</span>
                         <p className="text-primary">{session.swimmerFeedback || 'No feedback logged.'}</p>
                       </div>
@@ -1076,21 +1130,19 @@ export default function App() {
 
                     {/* Actions */}
                     <div className="flex items-center justify-between pt-xs text-xs">
-                      <div className="flex items-center gap-xs text-tertiary">
-                        <span className="font-mono text-xs">ID: {session.id}</span>
-                      </div>
+                      <span className="font-mono text-xs text-tertiary">ID: {session.id}</span>
                       <div className="flex items-center gap-sm">
                         <button
                           onClick={() => handleEditSession(session)}
-                          className="px-sm py-xxs rounded border border-secondary text-secondary hover:text-primary flex items-center gap-xs"
+                          className="inline-flex items-center gap-xs rounded-lg bg-primary px-md py-xs text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                         >
-                          <Edit3 className="w-3.5 h-3.5 text-fg-quaternary" /> Edit
+                          <Edit3 className="size-3.5 shrink-0 text-fg-quaternary" /> Edit
                         </button>
                         <button
                           onClick={() => handleDeleteSession(session.id)}
-                          className="px-sm py-xxs rounded border border-error-subtle text-utility-error-700 bg-utility-error-50 hover:bg-error-secondary flex items-center gap-xs"
+                          className="inline-flex items-center gap-xs rounded-lg bg-utility-error-50 px-md py-xs text-xs font-semibold text-utility-error-700 border border-error-subtle shadow-xs hover:bg-error-secondary focus-visible:ring-2 focus-visible:ring-focus-ring-error"
                         >
-                          <Trash2 className="w-3.5 h-3.5 text-fg-error-primary" /> Delete
+                          <Trash2 className="size-3.5 shrink-0 text-fg-error-primary" /> Delete
                         </button>
                       </div>
                     </div>
@@ -1101,216 +1153,248 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 3: MEMORY VAULT & WALRUS SYNC */}
+        {/* TAB 3: WALRUS MEMORY VAULT */}
         {activeTab === 'memory' && (
           <div className="space-y-xl">
             <div>
-              <h1 className="text-heading-sm font-bold text-primary">Swimmer Memory Vault</h1>
-              <p className="text-xs text-tertiary">
-                Total Recall Agent Memory: inspect what the app remembers, how each memory influences training recommendations, and synchronize to Walrus Decentralized Storage.
+              <h1 className="text-heading-sm font-semibold text-primary">Walrus Memory Vault</h1>
+              <p className="text-sm text-tertiary">
+                Official Walrus Memory SDK integration (@mysten-incubation/memwal). Inspect extracted insights, require explicit approval before syncing, and track asynchronous jobs to onchain confirmation.
               </p>
             </div>
 
-            {/* Walrus Connection Summary Banner */}
-            <div className="p-md rounded-xl bg-primary border border-secondary shadow-xs space-y-xs">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-sm">
-                <div className="flex items-center gap-xs">
-                  <HardDrive className="w-5 h-5 text-fg-brand-primary" />
-                  <h3 className="text-sm font-bold text-primary">Walrus Decentralized Memory Protocol</h3>
-                </div>
-                <div className="flex items-center gap-xs">
-                  <span
-                    className={`text-xs px-sm py-xs rounded font-medium border ${
-                      nodeStatus.tatumApi === 'connected'
-                        ? 'bg-utility-success-50 text-utility-success-700 border-utility-success-200'
-                        : 'bg-utility-gray-50 text-utility-gray-700 border-utility-gray-200'
-                    }`}
-                  >
-                    {nodeStatus.tatumApi === 'connected' ? 'Walrus Gateway Ready' : 'Local Development Fallback'}
-                  </span>
-                </div>
+            {/* Submission feedback banner */}
+            {submissionFeedback && (
+              <div className="flex gap-md rounded-xl bg-utility-brand-50 p-lg border border-utility-brand-200 text-xs text-utility-brand-700">
+                <Info className="size-5 shrink-0 text-utility-brand-600 mt-xxs" />
+                <p>{submissionFeedback}</p>
               </div>
-              <p className="text-xs text-secondary leading-relaxed">
-                Swimmer memories are stored in your browser's private local state by default. Never uploaded automatically.
-                When you choose to publish an anonymized memory snapshot to Walrus mainnet, it receives an immutable content Blob ID certified on-chain.
-              </p>
-              {syncStatusMsg && (
-                <div className="p-sm rounded bg-utility-brand-50 border border-utility-brand-200 text-xs text-utility-brand-700 mt-xs">
-                  {syncStatusMsg}
+            )}
+
+            {/* Tracked Asynchronous Walrus Jobs */}
+            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-md">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-xs">
+                  <HardDrive className="size-5 shrink-0 text-fg-brand-primary" />
+                  <h2 className="text-heading-xs font-semibold text-primary">Walrus Remember Jobs ({trackedJobs.length})</h2>
                 </div>
-              )}
-            </div>
-
-            {/* List of Extracted Memories */}
-            <div className="space-y-md">
-              <h2 className="text-sm font-bold text-primary">Extracted Training Memories ({memories.length})</h2>
-
-              {memories.length === 0 ? (
-                <div className="p-xl rounded-xl bg-primary border border-secondary text-center text-secondary text-sm">
-                  No memories generated yet. Log swimming sessions to allow SwimMemo to form training memories.
-                </div>
-              ) : (
-                memories.map(mem => (
-                  <div key={mem.id} className="p-md md:p-lg rounded-xl bg-primary border border-secondary shadow-xs space-y-sm">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-xs border-b border-secondary pb-xs">
-                      <div className="flex items-center gap-xs">
-                        <Brain className="w-4 h-4 text-fg-brand-primary" />
-                        <span className="text-xs font-bold uppercase tracking-wide text-primary">
-                          Memory: {mem.category}
-                        </span>
-                        <span className="text-xs px-xs rounded bg-secondary border border-secondary text-secondary">
-                          Session: {mem.sourceSessionId}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-xs">
-                        <span
-                          className={`text-xs px-sm py-xxs rounded font-medium border ${
-                            mem.status === 'CONFIRMED_MAINNET'
-                              ? 'bg-utility-success-50 text-utility-success-700 border-utility-success-200'
-                              : mem.status === 'PENDING_WALRUS'
-                              ? 'bg-utility-warning-50 text-utility-warning-700 border-utility-warning-200'
-                              : 'bg-utility-gray-50 text-utility-gray-700 border-utility-gray-200'
-                          }`}
-                        >
-                          {mem.status === 'CONFIRMED_MAINNET'
-                            ? 'Confirmed Walrus Mainnet'
-                            : mem.status === 'PENDING_WALRUS'
-                            ? 'Staged in Walrus Queue'
-                            : 'Local Browser Cache'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="space-y-xs text-xs">
-                      <div className="p-sm rounded bg-secondary border border-secondary">
-                        <span className="font-semibold text-tertiary block mb-xxs">Extracted Insight:</span>
-                        <p className="text-primary">{mem.insight}</p>
-                      </div>
-
-                      <div className="p-sm rounded bg-utility-brand-50 border border-utility-brand-200 text-utility-brand-700">
-                        <span className="font-semibold block mb-xxs">Influence on Future Suggestions:</span>
-                        <p>{mem.influenceRule}</p>
-                      </div>
-                    </div>
-
-                    {/* Walrus details if exists */}
-                    {mem.walrusBlobId && (
-                      <div className="p-xs rounded bg-secondary border border-secondary text-xs font-mono text-secondary space-y-xxs">
-                        <div>Blob ID: {mem.walrusBlobId}</div>
-                        {mem.suiObjectId && <div>Sui Object ID: {mem.suiObjectId}</div>}
-                      </div>
-                    )}
-
-                    {/* Review and Sync button */}
-                    <div className="flex items-center justify-between pt-xs border-t border-secondary">
-                      <span className="text-xs text-tertiary">Recorded: {mem.recordedAt}</span>
-                      <button
-                        onClick={() => handleSyncToWalrus(mem)}
-                        disabled={isSyncingToWalrus}
-                        className="px-sm py-xs rounded bg-brand-solid text-primary-on-brand hover:bg-brand-solid-hover text-xs font-medium flex items-center gap-xs transition-colors disabled:opacity-50"
-                      >
-                        <UploadCloud className="w-3.5 h-3.5 text-fg-white" />
-                        {isSyncingToWalrus ? 'Staging...' : 'Review & Publish to Walrus'}
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Sui Verification Tool */}
-            <div className="p-xl rounded-xl bg-primary border border-secondary shadow-xs space-y-md">
-              <div className="flex items-center gap-xs">
-                <ShieldCheck className="w-5 h-5 text-fg-brand-primary" />
-                <h3 className="text-heading-xs font-semibold text-primary">Tatum Sui RPC Onchain Object Verifier</h3>
-              </div>
-              <p className="text-xs text-secondary leading-relaxed">
-                Verify any on-chain Walrus Blob or metadata object registered on Sui network using the server-side Tatum Sui RPC Gateway.
-              </p>
-
-              <div className="flex flex-col sm:flex-row gap-xs">
-                <input
-                  type="text"
-                  placeholder="Enter Sui Object ID (e.g. 0x1b520353e191083dccad671db585525365e6f5bf70fcf63c7dd8e088ec5c57b6)"
-                  value={verifyingObjectId}
-                  onChange={e => setVerifyingObjectId(e.target.value)}
-                  className="flex-1 px-sm py-xs rounded border border-secondary bg-primary text-primary text-xs font-mono focus:ring-focus-ring"
-                />
                 <button
-                  onClick={() => handleVerifySuiObject(verifyingObjectId)}
-                  disabled={isVerifyingSui || !verifyingObjectId.trim()}
-                  className="px-md py-xs rounded bg-brand-solid text-primary-on-brand hover:bg-brand-solid-hover text-xs font-medium flex items-center justify-center gap-xs disabled:opacity-50"
+                  onClick={fetchHealthAndJobs}
+                  className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                 >
-                  {isVerifyingSui ? <RefreshCw className="w-3.5 h-3.5 animate-spin text-fg-white" /> : <Search className="w-3.5 h-3.5 text-fg-white" />}
-                  Verify on Sui
+                  <RefreshCw className="size-4 shrink-0 text-fg-quaternary" /> Refresh Jobs
                 </button>
               </div>
 
-              {suiVerificationResult && (
-                <div className="p-md rounded-lg bg-secondary border border-secondary space-y-xs text-xs">
-                  <div className="flex items-center justify-between border-b border-secondary pb-xs">
-                    <span className="font-semibold text-primary">Sui Gateway Verification Result:</span>
-                    <span className="text-xs px-xs rounded bg-primary border border-secondary font-mono">
-                      Status: {suiVerificationResult.status}
-                    </span>
-                  </div>
-                  <pre className="p-sm rounded bg-primary border border-secondary overflow-x-auto text-xs font-mono text-secondary max-h-48">
-                    {JSON.stringify(suiVerificationResult, null, 2)}
-                  </pre>
+              {trackedJobs.length === 0 ? (
+                <p className="text-xs text-tertiary py-md text-center">
+                  No Walrus remember jobs recorded in this server session. Job states are held server-side so refreshing the page does not cause duplicate submissions.
+                </p>
+              ) : (
+                <div className="space-y-sm">
+                  {trackedJobs.map(job => (
+                    <div key={job.jobId} className="p-md rounded-lg bg-secondary border border-secondary space-y-xs text-xs">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-xs">
+                        <div className="flex items-center gap-xs">
+                          <span className="font-mono text-xs font-bold text-primary">Job: {job.jobId}</span>
+                          <span
+                            className={`inline-flex items-center gap-xs rounded-full border px-md py-none text-xs font-medium ${
+                              job.status === 'done'
+                                ? 'bg-utility-success-50 text-utility-success-700 border-utility-success-200'
+                                : job.status === 'failed'
+                                ? 'bg-utility-error-50 text-utility-error-700 border-error-subtle'
+                                : 'bg-utility-warning-50 text-utility-warning-700 border-utility-warning-200'
+                            }`}
+                          >
+                            Status: {job.status}
+                          </span>
+                        </div>
+                        <span className="text-tertiary text-xs">Updated: {new Date(job.updatedAt).toLocaleTimeString()}</span>
+                      </div>
+
+                      {job.text && <p className="text-primary italic">"{job.text}"</p>}
+
+                      {job.blobId ? (
+                        <div className="p-xs rounded bg-primary border border-secondary font-mono text-xs text-utility-brand-700">
+                          Confirmed Blob ID: {job.blobId}
+                        </div>
+                      ) : (
+                        <div className="text-tertiary text-xs">
+                          {job.status === 'pending' || job.status === 'running'
+                            ? 'Processing in TEE relayer → staging to Walrus...'
+                            : job.error || 'Awaiting completion'}
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
-            </div>
+            </section>
+
+            {/* Extracted Local Memories Awaiting Swimmer Review */}
+            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-md">
+              <h2 className="text-heading-xs font-semibold text-primary">
+                Swimmer Insights Awaiting Approval ({localMemories.length})
+              </h2>
+              <p className="text-xs text-tertiary">
+                Privacy policy: Training notes and personal reflections are never uploaded automatically. Review and approve each item explicitly.
+              </p>
+
+              {localMemories.length === 0 ? (
+                <div className="text-center py-xl text-tertiary text-sm">
+                  No local session insights available. Add workouts in the Training Log first.
+                </div>
+              ) : (
+                <div className="space-y-md">
+                  {localMemories.map(mem => (
+                    <div key={mem.id} className="p-md rounded-lg bg-secondary border border-secondary space-y-sm text-xs">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-xs border-b border-secondary pb-xs">
+                        <div className="flex items-center gap-xs">
+                          <Brain className="size-4 shrink-0 text-fg-brand-primary" />
+                          <span className="font-bold uppercase text-primary">Category: {mem.category}</span>
+                          <span className="text-tertiary">· Session: {mem.sourceSessionId}</span>
+                        </div>
+                        <span className="inline-flex items-center gap-xs rounded-full border border-secondary bg-primary px-md py-none text-xs font-medium text-secondary">
+                          Local Dev Cache Only
+                        </span>
+                      </div>
+
+                      <div className="space-y-xs">
+                        <p className="text-primary font-medium">{mem.insight}</p>
+                        <p className="text-tertiary italic">Rule Influence: {mem.influenceRule}</p>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-xs border-t border-secondary">
+                        <span className="text-tertiary">{mem.recordedAt}</span>
+                        <button
+                          onClick={() => handleApproveAndRemember(mem.insight, mem.id)}
+                          disabled={submittingMemoryId === mem.id}
+                          className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-xs font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
+                        >
+                          <UploadCloud className="size-4 shrink-0 text-fg-white" />
+                          {submittingMemoryId === mem.id ? 'Submitting to Walrus...' : 'Approve & Save to Walrus'}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {/* Manual Save & Recall Test Panel */}
+            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-md">
+              <h2 className="text-heading-xs font-semibold text-primary">Manual Save-and-Recall Test Bench</h2>
+              <p className="text-xs text-tertiary">
+                Perform direct end-to-end testing of `remember()` and `recall()` against the Walrus Memory relayer.
+              </p>
+
+              {/* Save Section */}
+              <div className="space-y-sm p-md rounded-lg bg-secondary border border-secondary">
+                <span className="text-sm font-semibold text-primary block">Test Remember</span>
+                <div className="flex flex-col sm:flex-row gap-xs">
+                  <input
+                    type="text"
+                    placeholder="Enter swimming training memory to test (e.g., Felt shoulder impingement on 200m fly)"
+                    value={manualRememberText}
+                    onChange={e => setManualRememberText(e.target.value)}
+                    className="flex-1 rounded-md bg-primary px-lg py-sm text-xs text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
+                  />
+                  <button
+                    onClick={() => {
+                      if (!manualRememberText.trim()) return
+                      handleApproveAndRemember(manualRememberText, `manual_${Date.now()}`)
+                      setManualRememberText('')
+                    }}
+                    disabled={isManualSubmitting || !manualRememberText.trim()}
+                    className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-xs font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
+                  >
+                    <UploadCloud className="size-4 shrink-0 text-fg-white" />
+                    Test Remember
+                  </button>
+                </div>
+              </div>
+
+              {/* Recall Section */}
+              <div className="space-y-sm p-md rounded-lg bg-secondary border border-secondary">
+                <span className="text-sm font-semibold text-primary block">Test Recall</span>
+                <div className="flex flex-col sm:flex-row gap-xs">
+                  <input
+                    type="text"
+                    placeholder="Query Walrus Memory (e.g. fatigue, technique, breathing)"
+                    value={recallQuery}
+                    onChange={e => setRecallQuery(e.target.value)}
+                    className="flex-1 rounded-md bg-primary px-lg py-sm text-xs text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
+                  />
+                  <button
+                    onClick={() => handleRecallMemories()}
+                    disabled={isRecalling || !recallQuery.trim()}
+                    className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
+                  >
+                    <Search className="size-4 shrink-0 text-fg-quaternary" />
+                    {isRecalling ? 'Recalling...' : 'Test Recall'}
+                  </button>
+                </div>
+
+                {recallError && (
+                  <p className="text-xs text-utility-error-700 p-sm rounded bg-utility-error-50 border border-error-subtle">
+                    {recallError}
+                  </p>
+                )}
+              </div>
+            </section>
           </div>
         )}
 
-        {/* TAB 4: SETTINGS & SWIMMER PROFILE */}
+        {/* TAB 4: SETTINGS, SECRETS SETUP & SUI RPC */}
         {activeTab === 'settings' && (
           <div className="space-y-xl">
             <div>
-              <h1 className="text-heading-sm font-bold text-primary">Swimmer Profile & Node Connectivity</h1>
-              <p className="text-xs text-tertiary">Configure target goals, pool dimensions, and review integration health</p>
+              <h1 className="text-heading-sm font-semibold text-primary">Settings & Integration Environment</h1>
+              <p className="text-sm text-tertiary">
+                Configure your swimmer goals and verify server environment secrets for Walrus Memory SDK & Tatum Sui RPC.
+              </p>
             </div>
 
-            {/* Profile Form */}
-            <form onSubmit={handleSaveProfile} className="p-xl rounded-xl bg-primary border border-secondary shadow-xs space-y-md">
+            {/* Swimmer Profile Form */}
+            <form onSubmit={handleSaveProfile} className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-md">
               <div className="flex items-center justify-between border-b border-secondary pb-xs">
-                <h2 className="text-sm font-bold text-primary">Swimmer Profile</h2>
+                <h2 className="text-sm font-semibold text-primary">Swimmer Profile</h2>
                 {profileSavedMsg && (
                   <span className="text-xs text-utility-success-700 font-medium">{profileSavedMsg}</span>
                 )}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-md text-xs">
-                <div>
-                  <label className="block font-medium text-secondary mb-xs">Swimmer Nickname</label>
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Swimmer Nickname</label>
                   <input
                     type="text"
                     value={profileForm.nickname}
                     onChange={e => setProfileForm({ ...profileForm, nickname: e.target.value })}
-                    className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                   />
                 </div>
 
-                <div>
-                  <label className="block font-medium text-secondary mb-xs">Ability Level</label>
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Ability Level</label>
                   <select
                     value={profileForm.abilityLevel}
                     onChange={e => setProfileForm({ ...profileForm, abilityLevel: e.target.value as any })}
-                    className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                   >
-                    <option value="beginner">Beginner (learning fundamentals)</option>
-                    <option value="intermediate">Intermediate (consistent lap swimmer)</option>
-                    <option value="advanced">Advanced (masters/club training)</option>
-                    <option value="competitive">Competitive (sprint / distance racer)</option>
+                    <option value="beginner">Beginner</option>
+                    <option value="intermediate">Intermediate</option>
+                    <option value="advanced">Advanced</option>
+                    <option value="competitive">Competitive</option>
                   </select>
                 </div>
 
-                <div>
-                  <label className="block font-medium text-secondary mb-xs">Preferred Stroke</label>
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Preferred Stroke</label>
                   <select
                     value={profileForm.preferredStroke}
                     onChange={e => setProfileForm({ ...profileForm, preferredStroke: e.target.value as any })}
-                    className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                   >
                     <option value="freestyle">Freestyle</option>
                     <option value="backstroke">Backstroke</option>
@@ -1320,12 +1404,12 @@ export default function App() {
                   </select>
                 </div>
 
-                <div>
-                  <label className="block font-medium text-secondary mb-xs">Pool Length (metres / yards)</label>
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Pool Length</label>
                   <select
                     value={profileForm.poolLength}
                     onChange={e => setProfileForm({ ...profileForm, poolLength: Number(e.target.value) })}
-                    className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                   >
                     <option value="25">25m (Short Course Metres)</option>
                     <option value="50">50m (Long Course / Olympic)</option>
@@ -1333,8 +1417,8 @@ export default function App() {
                   </select>
                 </div>
 
-                <div>
-                  <label className="block font-medium text-secondary mb-xs">Target Distance per Workout (m)</label>
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Target Distance per Workout (m)</label>
                   <input
                     type="number"
                     min="100"
@@ -1342,29 +1426,29 @@ export default function App() {
                     step="50"
                     value={profileForm.targetDistance}
                     onChange={e => setProfileForm({ ...profileForm, targetDistance: Number(e.target.value) })}
-                    className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                   />
                 </div>
 
-                <div>
-                  <label className="block font-medium text-secondary mb-xs">Current Best Time (e.g., 100m split)</label>
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Current Best Time</label>
                   <input
                     type="text"
                     placeholder="1:08.5"
                     value={profileForm.currentBestTime}
                     onChange={e => setProfileForm({ ...profileForm, currentBestTime: e.target.value })}
-                    className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                   />
                 </div>
 
-                <div>
-                  <label className="block font-medium text-secondary mb-xs">Target Time (Goal split)</label>
+                <div className="flex flex-col gap-sm">
+                  <label className="text-sm font-medium text-secondary">Target Time</label>
                   <input
                     type="text"
                     placeholder="1:02.0"
                     value={profileForm.targetTime}
                     onChange={e => setProfileForm({ ...profileForm, targetTime: e.target.value })}
-                    className="w-full px-sm py-xs rounded border border-secondary bg-primary text-primary text-sm focus:ring-focus-ring"
+                    className="rounded-md bg-primary px-lg py-sm text-sm text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring"
                   />
                 </div>
               </div>
@@ -1372,66 +1456,139 @@ export default function App() {
               <div className="flex justify-end pt-xs">
                 <button
                   type="submit"
-                  className="px-lg py-xs rounded bg-brand-solid text-primary-on-brand font-medium text-sm hover:bg-brand-solid-hover"
+                  className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-sm font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                 >
                   Save Profile Changes
                 </button>
               </div>
             </form>
 
-            {/* Infrastructure & Node Details */}
-            <div className="p-xl rounded-xl bg-primary border border-secondary shadow-xs space-y-md">
+            {/* Owner Authentication Barrier */}
+            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-md">
+              <div className="flex items-center gap-xs">
+                <Lock className="size-5 shrink-0 text-fg-brand-primary" />
+                <h2 className="text-heading-xs font-semibold text-primary">Owner Demo Authorization Barrier</h2>
+              </div>
+              <p className="text-xs text-secondary leading-relaxed">
+                If OWNER_SECRET is configured on the server, all remember and recall routes require this owner token header so your shared memory account cannot be triggered by arbitrary visitors.
+              </p>
+
+              <div className="flex flex-col sm:flex-row gap-xs">
+                <input
+                  type="password"
+                  placeholder="Enter Owner Token (matches server OWNER_SECRET if configured)"
+                  value={ownerToken}
+                  onChange={e => setOwnerToken(e.target.value)}
+                  className="flex-1 rounded-md bg-primary px-lg py-sm text-xs text-primary placeholder:text-placeholder border border-primary focus-visible:ring-2 focus-visible:ring-focus-ring font-mono"
+                />
+                <button
+                  onClick={() => alert('Owner token updated in local browser state.')}
+                  className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
+                >
+                  Save Token
+                </button>
+              </div>
+            </section>
+
+            {/* Exact Location & Checklist of Environment Secrets */}
+            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-md">
               <div className="flex items-center justify-between border-b border-secondary pb-xs">
                 <div>
-                  <h2 className="text-sm font-bold text-primary">Integration Architecture Status</h2>
-                  <p className="text-xs text-tertiary">Server-side credentials & connectivity checklist</p>
+                  <h2 className="text-sm font-semibold text-primary">Server Environment Secrets Checklist</h2>
+                  <p className="text-xs text-tertiary">All keys remain strictly server-side and are scrubbed by credentialGuard</p>
                 </div>
                 <button
-                  onClick={checkBackendState}
-                  className="px-sm py-xs rounded border border-secondary bg-primary text-secondary hover:text-primary text-xs flex items-center gap-xs"
+                  onClick={fetchHealthAndJobs}
+                  className="inline-flex items-center gap-sm rounded-lg bg-primary px-lg py-sm text-xs font-semibold text-secondary border border-primary shadow-xs hover:bg-primary-hover focus-visible:ring-2 focus-visible:ring-focus-ring"
                 >
-                  <RefreshCw className="w-3.5 h-3.5 text-fg-quaternary" /> Refresh Status
+                  <RefreshCw className="size-4 shrink-0 text-fg-quaternary" /> Test Health
                 </button>
               </div>
 
               <div className="space-y-sm text-xs">
-                <div className="p-sm rounded bg-secondary border border-secondary flex items-start justify-between">
+                <div className="p-md rounded-lg bg-secondary border border-secondary flex items-start justify-between">
                   <div>
-                    <span className="font-semibold text-primary block">Tatum API Key (Server Environment)</span>
-                    <span className="text-tertiary">Injected securely on server via TATUM_API_KEY. Never exposed to browser.</span>
+                    <span className="font-semibold text-primary block">MEMWAL_PRIVATE_KEY</span>
+                    <span className="text-tertiary">Ed25519 delegate private key for Walrus Memory SDK.</span>
                   </div>
                   <span
-                    className={`px-sm py-xxs rounded font-medium ${
-                      nodeStatus.tatumApi === 'connected'
-                        ? 'bg-utility-success-50 text-utility-success-700'
-                        : 'bg-utility-warning-50 text-utility-warning-700'
+                    className={`inline-flex items-center gap-xs rounded-full border px-md py-none text-xs font-medium ${
+                      memwalHealth.keyConfigured
+                        ? 'bg-utility-success-50 text-utility-success-700 border-utility-success-200'
+                        : 'bg-utility-gray-50 text-utility-gray-700 border-utility-gray-200'
                     }`}
                   >
-                    {nodeStatus.tatumApi === 'connected' ? 'Configured & Active' : 'Not Set in Env'}
+                    {memwalHealth.keyConfigured ? 'Configured' : 'Missing'}
                   </span>
                 </div>
 
-                <div className="p-sm rounded bg-secondary border border-secondary flex items-start justify-between">
+                <div className="p-md rounded-lg bg-secondary border border-secondary flex items-start justify-between">
                   <div>
-                    <span className="font-semibold text-primary block">Walrus Storage API (/v4/data/storage)</span>
-                    <span className="text-tertiary">Mainnet decentralized blob storage with asynchronous worker certification.</span>
+                    <span className="font-semibold text-primary block">MEMWAL_ACCOUNT_ID</span>
+                    <span className="text-tertiary">Walrus Memory account object ID on Sui.</span>
                   </div>
-                  <span className="px-sm py-xxs rounded bg-utility-brand-50 text-utility-brand-700 font-medium">
-                    {nodeStatus.walrusUploads.length} Active Records
+                  <span
+                    className={`inline-flex items-center gap-xs rounded-full border px-md py-none text-xs font-medium ${
+                      memwalHealth.accountConfigured
+                        ? 'bg-utility-success-50 text-utility-success-700 border-utility-success-200'
+                        : 'bg-utility-gray-50 text-utility-gray-700 border-utility-gray-200'
+                    }`}
+                  >
+                    {memwalHealth.accountConfigured ? 'Configured' : 'Missing'}
                   </span>
                 </div>
 
-                <div className="p-sm rounded bg-secondary border border-secondary flex items-start justify-between">
+                <div className="p-md rounded-lg bg-secondary border border-secondary flex items-start justify-between">
                   <div>
-                    <span className="font-semibold text-primary block">Tatum Sui RPC Gateway</span>
-                    <span className="text-tertiary">Sui JSON-RPC gateway for on-chain state & checkpoint verification.</span>
+                    <span className="font-semibold text-primary block">MEMWAL_SERVER_URL</span>
+                    <span className="text-tertiary">Server URL (defaults to https://relayer.memory.walrus.xyz).</span>
                   </div>
-                  <span className="px-sm py-xxs rounded bg-utility-gray-50 text-utility-gray-700 font-mono text-xs">
-                    {nodeStatus.latestSuiCheckpoint ? `Checkpoint: ${nodeStatus.latestSuiCheckpoint}` : 'Standby / RPC Ready'}
+                  <span className="inline-flex items-center gap-xs rounded-full border border-utility-brand-200 bg-utility-brand-50 px-md py-none text-xs font-medium text-utility-brand-700 font-mono">
+                    {memwalHealth.serverUrl}
+                  </span>
+                </div>
+
+                <div className="p-md rounded-lg bg-secondary border border-secondary flex items-start justify-between">
+                  <div>
+                    <span className="font-semibold text-primary block">TATUM_API_KEY</span>
+                    <span className="text-tertiary">Powers server-side Sui JSON-RPC gateway for on-chain inspection.</span>
+                  </div>
+                  <span className="inline-flex items-center gap-xs rounded-full border border-secondary bg-primary px-md py-none text-xs font-medium text-secondary">
+                    Active / Optional
                   </span>
                 </div>
               </div>
-            </div>
+            </section>
+
+            {/* Tatum Sui RPC Account Inspection */}
+            <section className="rounded-xl border border-secondary bg-primary p-xl shadow-xs space-y-md">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-xs">
+                  <ShieldCheck className="size-5 shrink-0 text-fg-brand-primary" />
+                  <h2 className="text-heading-xs font-semibold text-primary">Tatum Sui RPC Account Inspector</h2>
+                </div>
+                <button
+                  onClick={handleInspectSuiAccount}
+                  disabled={isInspectingSui}
+                  className="inline-flex items-center gap-sm rounded-lg border border-transparent bg-brand-solid px-lg py-sm text-xs font-semibold text-primary-on-brand shadow-xs hover:bg-brand-solid-hover focus-visible:ring-2 focus-visible:ring-focus-ring disabled:opacity-50"
+                >
+                  <Search className="size-4 shrink-0 text-fg-white" />
+                  {isInspectingSui ? 'Querying Sui...' : 'Inspect MEMWAL_ACCOUNT_ID'}
+                </button>
+              </div>
+              <p className="text-xs text-secondary leading-relaxed">
+                Uses Tatum Sui RPC (`sui_getObject`) to inspect the configured `MEMWAL_ACCOUNT_ID` on Sui mainnet. Walrus blob IDs are distinct from Sui object IDs.
+              </p>
+
+              {suiAccountData && (
+                <div className="p-md rounded-lg bg-secondary border border-secondary space-y-xs text-xs">
+                  <span className="font-semibold text-primary block">Sui RPC Result:</span>
+                  <pre className="p-sm rounded bg-primary border border-secondary overflow-x-auto text-xs font-mono text-secondary max-h-60">
+                    {JSON.stringify(suiAccountData, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </section>
           </div>
         )}
       </main>
@@ -1440,7 +1597,7 @@ export default function App() {
       <footer className="border-t border-secondary bg-primary py-md px-md mt-auto text-xs text-tertiary text-center">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-sm">
           <span>SwimMemo · Track 02: Smart Agents for Real Life (Total Recall Hackathon)</span>
-          <span className="text-quaternary">Walrus Decentralized Storage + Tatum Sui RPC Integration</span>
+          <span className="text-quaternary">Official MemWal SDK (@mysten-incubation/memwal) + Tatum Sui RPC</span>
         </div>
       </footer>
     </div>

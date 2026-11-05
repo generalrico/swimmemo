@@ -13,6 +13,7 @@ import react from '@vitejs/plugin-react'
 import { fileURLToPath } from 'url'
 import path from 'path'
 import tatumRoutes from './routes/tatum.mjs'
+import memwalRoutes from './routes/memwal.mjs'
 import { credentialGuard } from './credential-guard.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -27,10 +28,11 @@ process.chdir(root)
 const app = express()
 app.use(express.json())
 
-// Redact the Tatum API key from every response before it leaves the process.
+// Redact the Tatum API key and MemWal secrets from every response before it leaves the process.
 app.use(credentialGuard)
 
 app.use('/api/tatum', tatumRoutes)
+app.use('/api/memwal', memwalRoutes)
 
 const server = createHttpServer(app)
 
