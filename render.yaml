@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: swimmemo
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MEMWAL_SERVER_URL
+        value: https://relayer.memory.walrus.xyz
+      - key: MEMWAL_ACCOUNT_ID
+        sync: false
+      - key: MEMWAL_PRIVATE_KEY
+        sync: false
+      - key: TATUM_API_KEY
+        sync: false
+      - key: OWNER_SECRET
+        sync: false

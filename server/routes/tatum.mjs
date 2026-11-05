@@ -77,55 +77,8 @@ router.get('/storage/upload/:jobId', async (req, res) => {
   }
 })
 
-// Store a swimming memory snapshot to Walrus using Tatum /v4/data/storage/upload (multipart)
-router.post('/storage/upload', async (req, res) => {
-  if (!process.env.TATUM_API_KEY) {
-    return res.status(401).json({
-      success: false,
-      status: 'no-api-key',
-      message: 'TATUM_API_KEY is missing. Walrus upload requires a valid Tatum Mainnet API key with Walrus storage credits enabled.'
-    })
-  }
-
-  try {
-    const { memoryPayload, filename } = req.body
-    if (!memoryPayload) {
-      return res.status(400).json({ success: false, message: 'memoryPayload is required' })
-    }
-
-    const jsonString = typeof memoryPayload === 'string' ? memoryPayload : JSON.stringify(memoryPayload, null, 2)
-    const blob = new Blob([jsonString], { type: 'application/json' })
-    const uploadFilename = filename || `swimmemo-memory-${Date.now()}.json`
-
-    const formData = new FormData()
-    formData.append('file', blob, uploadFilename)
-
-    const resp = await tatumFetch('/v4/data/storage/upload', {
-      method: 'POST',
-      body: formData,
-    })
-
-    if (!resp.ok) {
-      const errText = await resp.text()
-      return res.status(resp.status).json({
-        success: false,
-        statusCode: resp.status,
-        message: `Tatum Walrus upload error: ${errText}`
-      })
-    }
-
-    const data = await resp.json()
-    res.json({
-      success: true,
-      data
-    })
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Failed to upload memory payload to Walrus'
-    })
-  }
-})
+// Retired: live memories must use the approved MemWal flow.
+router.post('/storage/upload', (_req, res) => res.status(410).json({ error: 'Use /api/memwal/remember with explicit approval.' }))
 
 // Verify Sui onchain object via Tatum Sui RPC (e.g. Walrus Blob object ID on Sui)
 router.post('/sui/verify-object', async (req, res) => {

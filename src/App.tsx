@@ -163,6 +163,12 @@ export default function App() {
     return localStorage.getItem('swimmemo_owner_token') || ''
   })
 
+  const apiFetch = (input: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers)
+    if (ownerToken) headers.set('X-Owner-Token', ownerToken)
+    return fetch(input, { ...init, headers })
+  }
+
   // MemWal Health & Config Status
   const [memwalHealth, setMemwalHealth] = useState<{
     status: string
@@ -186,7 +192,9 @@ export default function App() {
   })
 
   // Tracked Jobs (from server activeJobs)
-  const [trackedJobs, setTrackedJobs] = useState<TrackedJob[]>([])
+  const [trackedJobs, setTrackedJobs] = useState<TrackedJob[]>(() => {
+    try { return JSON.parse(localStorage.getItem('swimmemo_jobs') || '[]') } catch { return [] }
+  })
 
   // Recalled memories from MemWal SDK
   const [recalledMemories, setRecalledMemories] = useState<MemWalRecalledItem[]>([])
@@ -244,17 +252,21 @@ export default function App() {
     localStorage.setItem('swimmemo_owner_token', ownerToken)
   }, [ownerToken])
 
+  useEffect(() => {
+    localStorage.setItem('swimmemo_jobs', JSON.stringify(trackedJobs))
+  }, [trackedJobs])
+
   // Poll MemWal health and tracked jobs
   const fetchHealthAndJobs = async () => {
     try {
-      const res = await fetch('/api/memwal/health')
+      const res = await apiFetch('/api/memwal/health')
       const data = await res.json()
-      setMemwalHealth(data)
+      setMemwalHealth(prev => ({ ...prev, ...data, authenticated: data.authenticated === true }))
 
-      const jobsRes = await fetch('/api/memwal/jobs')
+      const jobsRes = await apiFetch('/api/memwal/jobs')
       const jobsData = await jobsRes.json()
       if (jobsData.jobs) {
-        setTrackedJobs(jobsData.jobs)
+        setTrackedJobs(prev => Array.from(new Map([...prev, ...jobsData.jobs].map(j => [j.jobId, j])).values()))
       }
     } catch (err: any) {
       setMemwalHealth(prev => ({
@@ -268,7 +280,7 @@ export default function App() {
 
   useEffect(() => {
     fetchHealthAndJobs()
-  }, [])
+  }, [ownerToken])
 
   // Poll active incomplete jobs every 4 seconds
   useEffect(() => {
@@ -279,7 +291,7 @@ export default function App() {
       for (const job of trackedJobs) {
         if (job.status !== 'done' && job.status !== 'failed') {
           try {
-            const res = await fetch(`/api/memwal/job/${job.jobId}`)
+            const res = await apiFetch(`/api/memwal/job/${job.jobId}`)
             const data = await res.json()
             if (data.job) {
               setTrackedJobs(prev => prev.map(j => j.jobId === job.jobId ? data.job : j))
@@ -290,7 +302,7 @@ export default function App() {
     }, 4000)
 
     return () => clearInterval(interval)
-  }, [trackedJobs])
+  }, [trackedJobs, ownerToken])
 
   // Recall memories from MemWal SDK
   const handleRecallMemories = async (queryToUse?: string) => {
@@ -303,7 +315,7 @@ export default function App() {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
       if (ownerToken) headers['x-owner-token'] = ownerToken
 
-      const res = await fetch('/api/memwal/recall', {
+      const res = await apiFetch('/api/memwal/recall', {
         method: 'POST',
         headers,
         body: JSON.stringify({ query: q, limit: 10 })
@@ -474,7 +486,7 @@ export default function App() {
 
       const idempotencyKey = `swimmemo_${profile.nickname}_${id}`
 
-      const res = await fetch('/api/memwal/remember', {
+      const res = await apiFetch('/api/memwal/remember', {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -503,7 +515,7 @@ export default function App() {
     setIsInspectingSui(true)
     setSuiAccountData(null)
     try {
-      const res = await fetch('/api/memwal/sui/inspect-account')
+      const res = await apiFetch('/api/memwal/sui/inspect-account')
       const data = await res.json()
       setSuiAccountData(data)
     } catch (err: any) {

@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url'
 import path from 'path'
 import tatumRoutes from './routes/tatum.mjs'
 import memwalRoutes from './routes/memwal.mjs'
+import { ownerAuth } from './owner-auth.mjs'
 import { credentialGuard } from './credential-guard.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -31,11 +32,18 @@ app.use(express.json())
 // Redact the Tatum API key and MemWal secrets from every response before it leaves the process.
 app.use(credentialGuard)
 
+app.get('/healthz', (_req, res) => res.json({ status: 'ok' }))
+app.use('/api', ownerAuth)
 app.use('/api/tatum', tatumRoutes)
 app.use('/api/memwal', memwalRoutes)
 
 const server = createHttpServer(app)
 
+if (process.env.NODE_ENV === 'production') {
+  app.use('/api', (_req, res) => res.status(404).json({ error: 'Unknown API route' }))
+  app.use(express.static(path.join(root, 'dist')))
+  app.get('*', (_req, res) => res.sendFile(path.join(root, 'dist', 'index.html')))
+} else {
 // All Vite config is inline — no vite.config.js needed, no temp files written.
 // cacheDir points to /tmp so dep pre-bundling works on read-only node_modules mounts.
 const vite = await createViteServer({
@@ -56,6 +64,8 @@ const vite = await createViteServer({
   appType: 'spa',
 })
 app.use(vite.middlewares)
+
+}
 
 const port = process.env.PORT ?? 3000
 server.listen(port, () => {

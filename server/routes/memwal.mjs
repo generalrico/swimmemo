@@ -106,6 +106,8 @@ router.get('/health', async (_req, res) => {
   try {
     // MemWal health() tests relayer reachability (unauthenticated preflight)
     const healthResult = await client.health()
+    // Signed read verifies the delegate; health() alone is unauthenticated.
+    await client.recall({ query: 'SwimMemo connection check', limit: 1 })
     res.json({
       status: 'connected_healthy',
       reachability: 'reachable',
@@ -119,8 +121,8 @@ router.get('/health', async (_req, res) => {
     })
   } catch (err) {
     res.json({
-      status: 'server_unreachable',
-      reachability: 'unreachable',
+      status: [401, 403].includes(err.status) ? 'authentication_failed' : 'server_unreachable',
+      reachability: [401, 403].includes(err.status) ? 'reachable' : 'unreachable',
       authenticated: false,
       serverUrl,
       keyConfigured: true,
@@ -143,14 +145,14 @@ router.post('/remember', async (req, res) => {
   }
 
   const { text, approved, idempotencyKey } = req.body
-  if (!approved) {
+  if (approved !== true) {
     return res.status(400).json({
       success: false,
       error: 'Explicit swimmer approval is required before persisting any memory to Walrus.'
     })
   }
 
-  if (!text || typeof text !== 'string' || !text.trim()) {
+  if (!text || typeof text !== 'string' || !text.trim() || text.length > 10000) {
     return res.status(400).json({
       success: false,
       error: 'text is required and must not be empty.'
@@ -273,7 +275,7 @@ router.post('/recall', async (req, res) => {
   try {
     const recallResult = await client.recall({
       query: query.trim(),
-      limit: Math.min(Number(limit) || 5, 20),
+      limit: Math.max(1, Math.min(Math.floor(Number(limit)) || 5, 20)),
       sort: 'recent'
     })
 
@@ -351,8 +353,8 @@ router.get('/sui/inspect-account', async (_req, res) => {
     }
 
     const json = await rpcRes.json()
-    res.json({
-      status: 'success',
+    res.status(json.error || json.result?.error ? 502 : 200).json({
+      status: json.error || json.result?.error ? 'rpc_error' : 'success',
       accountId,
       rpcResponse: json
     })
