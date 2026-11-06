@@ -1,5 +1,7 @@
 import { Router } from 'express'
-import { tatumApiBase, tatumFetch, tatumRpc, MissingApiKeyError } from '../tatum-client.mjs'
+import { tatumApiBase, tatumFetch, MissingApiKeyError } from '../tatum-client.mjs'
+
+import { readTatumSuiObject, readTatumSuiCheckpoint, tatumSuiError } from '../tatum-sui.mjs'
 
 const router = Router()
 
@@ -80,96 +82,25 @@ router.get('/storage/upload/:jobId', async (req, res) => {
 // Retired: live memories must use the approved MemWal flow.
 router.post('/storage/upload', (_req, res) => res.status(410).json({ error: 'Use /api/memwal/remember with explicit approval.' }))
 
-// Verify Sui onchain object via Tatum Sui RPC (e.g. Walrus Blob object ID on Sui)
+// Sui inspection uses native gRPC; the retired JSON-RPC gateway is not called.
 router.post('/sui/verify-object', async (req, res) => {
-  if (!process.env.TATUM_API_KEY) {
-    return res.status(401).json({
-      status: 'no-api-key',
-      message: 'TATUM_API_KEY is not set for Sui RPC verification'
-    })
-  }
-
-  const { objectId, network = 'mainnet' } = req.body
-  if (!objectId) {
-    return res.status(400).json({ error: 'objectId is required' })
-  }
-
+  if (req.body.network && req.body.network !== 'mainnet') return res.status(400).json({ status: 'invalid_network', message: 'This demo uses Sui mainnet.' })
   try {
-    // sui_getObject is standard Sui JSON-RPC method
-    const rpcBody = {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'sui_getObject',
-      params: [
-        objectId,
-        {
-          showType: true,
-          showOwner: true,
-          showPreviousTransaction: true,
-          showDisplay: true,
-          showContent: true,
-          showBcs: false,
-          showStorageRebate: true
-        }
-      ]
-    }
-
-    const rpcRes = await tatumRpc('sui', rpcBody, network)
-    if (!rpcRes.ok) {
-      const errText = await rpcRes.text()
-      return res.status(rpcRes.status).json({
-        status: 'error',
-        statusCode: rpcRes.status,
-        message: errText
-      })
-    }
-
-    const json = await rpcRes.json()
-    res.json({
-      status: 'success',
-      network,
-      rpcResponse: json
-    })
+    const response = await readTatumSuiObject(req.body.objectId)
+    res.json({ status: 'success', network: 'mainnet', protocol: 'grpc', rpcResponse: response })
   } catch (error) {
-    if (error instanceof MissingApiKeyError) {
-      return res.status(401).json({ status: 'no-api-key', message: 'TATUM_API_KEY is missing' })
-    }
-    res.status(500).json({ status: 'error', message: error.message })
+    const { httpStatus, ...details } = tatumSuiError(error)
+    res.status(httpStatus).json(details)
   }
 })
 
-// Query latest Sui checkpoint / network state
-router.get('/sui/state', async (req, res) => {
-  if (!process.env.TATUM_API_KEY) {
-    return res.json({
-      status: 'no-api-key',
-      message: 'TATUM_API_KEY not configured'
-    })
-  }
-
+router.get('/sui/state', async (_req, res) => {
   try {
-    const rpcBody = {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'sui_getLatestCheckpointSequenceNumber',
-      params: []
-    }
-    const rpcRes = await tatumRpc('sui', rpcBody, 'mainnet')
-    if (!rpcRes.ok) {
-      const errText = await rpcRes.text()
-      return res.json({ status: 'error', message: errText })
-    }
-    const json = await rpcRes.json()
-    res.json({
-      status: 'connected',
-      latestCheckpoint: json.result || null,
-      error: json.error || null
-    })
+    const response = await readTatumSuiCheckpoint()
+    res.json({ status: 'connected', protocol: 'grpc', latestCheckpoint: response.checkpoint.sequenceNumber })
   } catch (error) {
-    res.json({
-      status: 'error',
-      message: error.message
-    })
+    const { httpStatus, ...details } = tatumSuiError(error)
+    res.status(httpStatus).json(details)
   }
 })
 

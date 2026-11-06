@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { MemWal } from '@mysten-incubation/memwal'
-import { tatumRpc, MissingApiKeyError } from '../tatum-client.mjs'
+import { readTatumSuiObject, tatumSuiError, TATUM_SUI_HOST } from '../tatum-sui.mjs'
 
 const router = Router()
 
@@ -304,73 +304,16 @@ router.get('/jobs', async (_req, res) => {
   })
 })
 
-// 6. Tatum Sui RPC: inspect configured MEMWAL_ACCOUNT_ID on mainnet using sui_getObject
+// Read the configured account through Tatum's supported native gRPC gateway.
 router.get('/sui/inspect-account', async (_req, res) => {
-  const accountId = process.env.MEMWAL_ACCOUNT_ID
-  if (!accountId) {
-    return res.json({
-      status: 'missing_account_id',
-      message: 'MEMWAL_ACCOUNT_ID is not configured in environment variables'
-    })
-  }
-
-  if (!process.env.TATUM_API_KEY) {
-    return res.json({
-      status: 'missing_tatum_key',
-      accountId,
-      message: 'TATUM_API_KEY is not configured for Sui RPC inspection'
-    })
-  }
-
+  const accountId = process.env.MEMWAL_ACCOUNT_ID?.trim()
+  if (!accountId) return res.status(503).json({ status: 'missing_account_id', message: 'MEMWAL_ACCOUNT_ID is not configured.' })
   try {
-    const rpcBody = {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'sui_getObject',
-      params: [
-        accountId,
-        {
-          showType: true,
-          showOwner: true,
-          showPreviousTransaction: true,
-          showDisplay: true,
-          showContent: true,
-          showBcs: false,
-          showStorageRebate: true
-        }
-      ]
-    }
-
-    const rpcRes = await tatumRpc('sui', rpcBody, 'mainnet')
-    if (!rpcRes.ok) {
-      const errText = await rpcRes.text()
-      return res.status(rpcRes.status).json({
-        status: 'rpc_error',
-        accountId,
-        statusCode: rpcRes.status,
-        message: errText
-      })
-    }
-
-    const json = await rpcRes.json()
-    res.status(json.error || json.result?.error ? 502 : 200).json({
-      status: json.error || json.result?.error ? 'rpc_error' : 'success',
-      accountId,
-      rpcResponse: json
-    })
+    const response = await readTatumSuiObject(accountId)
+    return res.json({ status: 'success', protocol: 'grpc', endpoint: TATUM_SUI_HOST, accountId, rpcResponse: response })
   } catch (error) {
-    if (error instanceof MissingApiKeyError) {
-      return res.json({
-        status: 'missing_tatum_key',
-        accountId,
-        message: 'TATUM_API_KEY is missing'
-      })
-    }
-    res.status(500).json({
-      status: 'error',
-      accountId,
-      message: error.message
-    })
+    const { httpStatus, ...details } = tatumSuiError(error)
+    return res.status(httpStatus).json({ ...details, protocol: 'grpc', endpoint: TATUM_SUI_HOST, accountId })
   }
 })
 

@@ -1622,7 +1622,7 @@ export default function App() {
                 </button>
               </div>
               <p className="text-xs text-secondary leading-relaxed">
-                Uses Tatum Sui RPC (`sui_getObject`) to inspect the configured `MEMWAL_ACCOUNT_ID` on Sui mainnet. Walrus blob IDs are distinct from Sui object IDs.
+                Uses Tatum Sui gRPC (`LedgerService.GetObject`) to inspect the configured `MEMWAL_ACCOUNT_ID` on Sui mainnet. Walrus blob IDs are distinct from Sui object IDs.
               </p>
 
               {suiAccountData && (
